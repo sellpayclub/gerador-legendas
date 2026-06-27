@@ -1,0 +1,18 @@
+[Unit]
+Description=Legendas Locais Frontend
+After=network.target legendas-backend.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/legendas-locais/frontend/.next/standalone
+Environment=NODE_ENV=production
+Environment=PORT=3000
+Environment=HOSTNAME=0.0.0.0
+Environment=BACKEND_URL=http://127.0.0.1:8000
+ExecStart=/usr/bin/node server.js
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

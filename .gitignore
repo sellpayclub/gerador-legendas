@@ -1,0 +1,26 @@
+# Dependencies
+node_modules/
+backend/.venv/
+__pycache__/
+*.pyc
+*.pyo
+backend/*.egg-info/
+
+# Build / cache
+frontend/.next/
+frontend/out/
+*.log
+
+# Secrets & runtime data (never commit)
+.env
+.env.*
+!.env.example
+backend/.env
+data/jobs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local VPS credentials (never commit)
+deploy/vps.local.env
