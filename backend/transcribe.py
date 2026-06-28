@@ -96,15 +96,36 @@ def _transcribe_openai(
     if lang:
         form_data.append(("language", lang))
 
-    with open(audio_wav, "rb") as fh:
-        files = {"file": (audio_wav.name, fh, "audio/wav")}
-        headers = {"Authorization": f"Bearer {api_key}"}
-        resp = requests.post(
-            OPENAI_URL, headers=headers, files=files, data=form_data, timeout=600
-        )
-        if resp.status_code != 200:
-            raise RuntimeError(f"OpenAI API error {resp.status_code}: {resp.text[:500]}")
-        data = resp.json()
+    # Crawl the progress bar while we wait on the API so the UI doesn't look
+    # frozen during a long upload/transcription.
+    stop = threading.Event()
+    if on_progress:
+        est_total = max(8.0, (duration or 0.0) / 12.0)
+        t0 = time.time()
+
+        def _crawl() -> None:
+            while not stop.wait(0.7):
+                elapsed = time.time() - t0
+                pct = 0.1 + min(0.75, (elapsed / est_total) * 0.75)
+                try:
+                    on_progress(pct, f"Transcrevendo com OpenAI... {int(pct * 100)}%")
+                except Exception:
+                    pass
+
+        threading.Thread(target=_crawl, daemon=True).start()
+
+    try:
+        with open(audio_wav, "rb") as fh:
+            files = {"file": (audio_wav.name, fh, "audio/wav")}
+            headers = {"Authorization": f"Bearer {api_key}"}
+            resp = requests.post(
+                OPENAI_URL, headers=headers, files=files, data=form_data, timeout=600
+            )
+            if resp.status_code != 200:
+                raise RuntimeError(f"OpenAI API error {resp.status_code}: {resp.text[:500]}")
+            data = resp.json()
+    finally:
+        stop.set()
 
     if on_progress:
         on_progress(0.9, "Processando palavras...")

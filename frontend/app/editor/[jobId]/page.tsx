@@ -113,6 +113,31 @@ export default function EditorPage() {
     }
   }, [liveJob]);
 
+  // Fallback polling: if SSE drops/misses the completion event, keep asking the
+  // backend until the transcription exists so the UI never gets stuck loading.
+  useEffect(() => {
+    if (wordsData) return;
+    if (job?.stage === "error") return;
+    const id = setInterval(async () => {
+      try {
+        const j = await getJob(jobId);
+        setJob(j);
+        if (j.stage === "error") {
+          setError(j.message || "Falha ao processar o vídeo.");
+          return;
+        }
+        if (j.has_words) {
+          const w = await getWords(jobId);
+          setWordsData(w);
+          setWords(w.words);
+        }
+      } catch {
+        /* ignore transient errors, keep polling */
+      }
+    }, 3000);
+    return () => clearInterval(id);
+  }, [jobId, wordsData, job?.stage]);
+
   // When transcription completes, fetch words
   useEffect(() => {
     if (liveJob?.has_words) {
