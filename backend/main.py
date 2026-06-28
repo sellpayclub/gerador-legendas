@@ -77,6 +77,9 @@ class RenderRequest(BaseModel):
     resolution: str = "1080p"          # "480p" | "720p" | "1080p"
     keywords: list[int] | None = None  # word indices to zoom on; None = no zoom
     overlay_asset: str | None = None   # filename uploaded via /assets
+    # Video pan/tilt inside the template's video_region (0.0..1.0, 0.5=center):
+    video_pos_x: float | None = None
+    video_pos_y: float | None = None
 
 
 class KeywordsUpdate(BaseModel):
@@ -408,7 +411,8 @@ async def _run_render(job: Job, body: RenderRequest) -> None:
             data["height"] = job.height
         data["fps"] = job.fps
         await asyncio.to_thread(
-            generate_ass, data, cfg, body.words_per_line, job.ass_path
+            generate_ass, data, cfg, body.words_per_line, job.ass_path,
+            body.keywords,
         )
         job.update(Stage.GENERATING_ASS, 1.0, "ASS pronto")
 
@@ -423,6 +427,7 @@ async def _run_render(job: Job, body: RenderRequest) -> None:
                     job.video_path, overlay_path, job.ass_path, job.output_path,
                     tpl, body.keywords, body.resolution,
                     duration=job.duration, on_progress=on_progress,
+                    video_pos=(body.video_pos_x, body.video_pos_y),
                 )
         else:
             def work() -> None:

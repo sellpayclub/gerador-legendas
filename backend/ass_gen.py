@@ -77,32 +77,86 @@ def _pos_and_anim(cfg: StyleConfig, width: int, height: int) -> str:
     return f"{{{pos}{anim}}}"
 
 
+def _pos_with_keyword_anim(
+    cfg: StyleConfig,
+    width: int,
+    height: int,
+    kw_times: list[tuple[float, float]] | None,
+) -> str:
+    """Position + line-level animation.
+
+    Per-word keyword pop is handled inline in the karaoke body (see
+    `_build_karaoke_body`), so this just returns the position + cfg.animation.
+    Kept for backwards compatibility with the line-level pop fallback.
+    """
+    return _pos_and_anim(cfg, width, height)
+
+
+def _keyword_inline_tags(rel_start_ms: float, rel_end_ms: float, scale: int) -> str:
+    """Inline \\t tags that scale JUST the following word (pop on speak)."""
+    rs = int(max(0, rel_start_ms))
+    re_ = int(max(rs + 40, rel_end_ms))
+    return (
+        f"\\t({rs},{rs + 80},\\fscx{scale}\\fscy{scale})"
+        f"\\t({re_},{re_ + 150},\\fscx100\\fscy100)"
+    )
+
+
 def _word_sep(cfg: StyleConfig, is_first: bool) -> str:
     if is_first:
         return " "
     return " " + " " * max(0, cfg.word_spacing // 4)
 
 
-def _build_karaoke_body(group: list[dict], cfg: StyleConfig) -> str:
+def _build_karaoke_body(
+    group: list[dict],
+    cfg: StyleConfig,
+    line_start: float,
+    kw_indices_in_group: list[int] | None,
+) -> str:
+    """Build the karaoke body. For keyword words, prepend inline \\t tags that
+    scale JUST that word when it's spoken (per-word pop)."""
+    kw_set = set(kw_indices_in_group or [])
+    kw_scale = int(getattr(cfg, "keyword_scale", 180) or 180)
     parts: list[str] = []
-    for w in group:
+    for i, w in enumerate(group):
         dur_cs = max(2, round((w["end"] - w["start"]) * 100))
         word_text = _escape_ass(_word_text(w))
         if not word_text:
             continue
         sep = _word_sep(cfg, not parts)
-        parts.append(f"{sep}{{\\kf{dur_cs}}}{word_text}")
+        if i in kw_set:
+            rel_start_ms = (float(w["start"]) - line_start) * 1000.0
+            rel_end_ms = (float(w["end"]) - line_start) * 1000.0
+            kt = _keyword_inline_tags(rel_start_ms, rel_end_ms, kw_scale)
+            parts.append(f"{sep}{{{kt}\\kf{dur_cs}}}{word_text}")
+        else:
+            parts.append(f"{sep}{{\\kf{dur_cs}}}{word_text}")
     return "".join(parts)
 
 
-def _build_plain_body(group: list[dict], cfg: StyleConfig) -> str:
+def _build_plain_body(
+    group: list[dict],
+    cfg: StyleConfig,
+    line_start: float,
+    kw_indices_in_group: list[int] | None,
+) -> str:
+    """Plain body (no karaoke color change) — but keyword words still pop."""
+    kw_set = set(kw_indices_in_group or [])
+    kw_scale = int(getattr(cfg, "keyword_scale", 180) or 180)
     parts: list[str] = []
-    for w in group:
+    for i, w in enumerate(group):
         word_text = _escape_ass(_word_text(w))
         if not word_text:
             continue
         sep = _word_sep(cfg, not parts)
-        parts.append(f"{sep}{word_text}")
+        if i in kw_set:
+            rel_start_ms = (float(w["start"]) - line_start) * 1000.0
+            rel_end_ms = (float(w["end"]) - line_start) * 1000.0
+            kt = _keyword_inline_tags(rel_start_ms, rel_end_ms, kw_scale)
+            parts.append(f"{sep}{{{kt}}}{word_text}")
+        else:
+            parts.append(f"{sep}{word_text}")
     return "".join(parts)
 
 
@@ -111,6 +165,7 @@ def generate_ass(
     cfg: StyleConfig,
     words_per_line: int,
     out_path: Path,
+    keyword_indices: list[int] | None = None,
 ) -> None:
     width = int(words_data.get("width", 1920))
     height = int(words_data.get("height", 1080))
@@ -161,28 +216,35 @@ def generate_ass(
         out_path.write_text(header, encoding="utf-8")
         return
 
-    tag_prefix = _pos_and_anim(cfg, width, height)
+    kw_set = set(keyword_indices or [])
     lines: list[str] = [header]
+    global_idx = 0
     for group in _group_words(words, words_per_line):
         start = group[0]["start"]
         end = group[-1]["end"] + 0.1
         t0, t1 = _fmt_time(start), _fmt_time(end)
 
+        # Indices of keyword words WITHIN this group (0-based into the group).
+        kw_in_group = [i for i, w in enumerate(group) if (global_idx + i) in kw_set]
+        tag_prefix = _pos_and_anim(cfg, width, height)
+
         if cfg.box:
-            plain = _build_plain_body(group, cfg)
+            plain = _build_plain_body(group, cfg, start, kw_in_group)
             if plain.strip():
                 lines.append(
                     f"Dialogue: 0,{t0},{t1},CaptionBoxBack,,0,0,0,,{tag_prefix}{plain}\n"
                 )
-            karaoke = _build_karaoke_body(group, cfg)
+            karaoke = _build_karaoke_body(group, cfg, start, kw_in_group)
             if karaoke.strip():
                 lines.append(
                     f"Dialogue: 1,{t0},{t1},Caption,,0,0,0,,{tag_prefix}{karaoke}\n"
                 )
         else:
-            karaoke = _build_karaoke_body(group, cfg)
+            karaoke = _build_karaoke_body(group, cfg, start, kw_in_group)
             lines.append(
                 f"Dialogue: 0,{t0},{t1},Caption,,0,0,0,,{tag_prefix}{karaoke}\n"
             )
+
+        global_idx += len(group)
 
     out_path.write_text("".join(lines), encoding="utf-8")

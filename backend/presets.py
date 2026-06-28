@@ -32,6 +32,8 @@ class StyleConfig:
     margin_v: int = 120              # used when pos is None
     letter_spacing: int = 2          # ASS Spacing field (px between chars)
     word_spacing: int = 4            # extra px gap between words at PlayRes
+    # Per-word pop scale (%) applied to keyword words when spoken (CapCut style).
+    keyword_scale: int = 180
 
     def to_dict(self) -> dict:
         return asdict(self)

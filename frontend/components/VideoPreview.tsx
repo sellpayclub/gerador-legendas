@@ -24,6 +24,8 @@ type Props = {
   registerControls?: (controls: { seek: (t: number) => void; getCurrentTime: () => number }) => void;
   /** Limit video height to fit viewport (editor split layout). */
   compact?: boolean;
+  /** Keyword word indices — these pop (scale up) when spoken. */
+  keywords?: number[];
 };
 
 /**
@@ -47,6 +49,7 @@ export default function VideoPreview({
   registerControls,
   isPlaceholder = false,
   compact = false,
+  keywords,
 }: Props & { isPlaceholder?: boolean }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const overlayRef = useRef<HTMLDivElement>(null);
@@ -198,12 +201,17 @@ export default function VideoPreview({
 
   const renderGroup = () => {
     if (!activeGroup) return null;
+    const kwSet = new Set(keywords ?? []);
+    const kwScale = (style.keyword_scale ?? 180) / 100;
     return activeGroup.map((w, i) => {
       const wordGlobalIdx = displayWords.indexOf(w);
       const isActive = wordGlobalIdx === previewActiveIdx;
+      const isKw = kwSet.has(wordGlobalIdx);
       const color = isActive ? style.primary_color : style.secondary_color;
       const label = (w.w || "").trim();
       if (!label) return null;
+      // Keyword pop: scale up while the keyword word is being spoken.
+      const scale = isKw && isActive ? kwScale : 1.0;
       return (
         <span
           key={i}
@@ -213,7 +221,17 @@ export default function VideoPreview({
             isLastInGroup: i === activeGroup!.length - 1,
           })}
         >
-          {label}
+          <span
+            style={{
+              display: "inline-block",
+              transform: `scale(${scale})`,
+              transformOrigin: "center bottom",
+              transition: "transform 120ms ease-out",
+              fontWeight: isKw ? 800 : undefined,
+            }}
+          >
+            {label}
+          </span>
         </span>
       );
     });

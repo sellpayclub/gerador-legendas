@@ -70,6 +70,7 @@ export default function EditorPage() {
   const [resolution, setResolution] = useState<"480p" | "720p" | "1080p">("1080p");
   const [overlayAsset, setOverlayAsset] = useState<string | null>(null);
   const [keywords, setKeywords] = useState<number[]>([]);
+  const [videoPos, setVideoPos] = useState<{ x: number; y: number }>({ x: 0.5, y: 0.5 });
   const [rendering, setRendering] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
 
@@ -212,8 +213,10 @@ export default function EditorPage() {
       pos_y: position.y,
       template: selectedTemplate,
       resolution,
-      keywords: selectedTemplate ? keywords : null,
+      keywords: keywords.length > 0 ? keywords : null,
       overlay_asset: selectedTemplate ? overlayAsset : null,
+      video_pos_x: selectedTemplate ? videoPos.x : null,
+      video_pos_y: selectedTemplate ? videoPos.y : null,
     });
     router.push(`/render/${jobId}`);
   };
@@ -270,6 +273,9 @@ export default function EditorPage() {
                 style={style}
                 wordsPerLine={wordsPerLine}
                 currentTime={currentTime}
+                keywords={keywords}
+                videoPos={videoPos}
+                onVideoPosChange={setVideoPos}
                 registerControls={(c) => (videoControlsRef.current = c)}
               />
             ) : job && (
@@ -284,6 +290,7 @@ export default function EditorPage() {
                 position={position}
                 isPlaceholder={words.length === 0}
                 compact
+                keywords={keywords}
                 registerControls={(c) => (videoControlsRef.current = c)}
               />
             )}

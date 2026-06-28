@@ -79,6 +79,7 @@ def _build_cmd(
     fps: float,
     duration: float,
     hw: bool,
+    video_pos: tuple[Optional[float], Optional[float]] = (None, None),
 ) -> list[str]:
     cmd: list[str] = [ffmpeg_bin(), "-y"]
 
@@ -97,10 +98,18 @@ def _build_cmd(
     vr = tpl.video_region
     orr = tpl.overlay_region
 
-    # Original video -> video_region (cover: scale to fill then center-crop)
+    # Original video -> video_region (cover: scale to fill then crop).
+    # video_pos (0..1, 0.5=center) controls the crop offset so the user can
+    # choose which part of the video stays visible after cropping to the
+    # template's vertical/square region.
+    vpx, vpy = video_pos
+    vpx = 0.5 if vpx is None else max(0.0, min(1.0, float(vpx)))
+    vpy = 0.5 if vpy is None else max(0.0, min(1.0, float(vpy)))
+    # crop=W:H:x='(iw-W)*px':y='(ih-H)*py'
     fg = (
         f"[0:v]scale={vr.w}:{vr.h}:force_original_aspect_ratio=increase,"
-        f"crop={vr.w}:{vr.h},setsar=1,fps={fps}[vsrc]"
+        f"crop={vr.w}:{vr.h}:x='(iw-{vr.w})*{vpx:.3f}':y='(ih-{vr.h})*{vpy:.3f}',"
+        f"setsar=1,fps={fps}[vsrc]"
     )
 
     if overlay is not None:
@@ -166,6 +175,7 @@ def render_compose(
     resolution: str,
     duration: float = 0.0,
     on_progress: Optional[Callable[[float, str], None]] = None,
+    video_pos: tuple[Optional[float], Optional[float]] = (None, None),
 ) -> None:
     if not video.exists():
         raise FileNotFoundError(f"video missing: {video}")
@@ -219,6 +229,7 @@ def render_compose(
     cmd = _build_cmd(
         video, overlay, ass_path, out_path, tpl,
         kw_intervals, out_w, out_h, fps, duration, hw,
+        video_pos=video_pos,
     )
 
     if on_progress:

@@ -43,6 +43,7 @@ export type StyleConfig = {
   margin_v: number;
   letter_spacing?: number;
   word_spacing?: number;
+  keyword_scale?: number;
 };
 
 export type RenderRequest = {
@@ -56,6 +57,8 @@ export type RenderRequest = {
   resolution?: "480p" | "720p" | "1080p";
   keywords?: number[] | null;
   overlay_asset?: string | null;
+  video_pos_x?: number | null;
+  video_pos_y?: number | null;
 };
 
 export type Region = { x: number; y: number; w: number; h: number };
