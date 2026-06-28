@@ -109,6 +109,14 @@ def create_job(job_id: str, filename: str) -> Job:
     job.words_path = d / "words.json"
     job.ass_path = d / "captions.ass"
     job.output_path = d / "output.mp4"
+    # Persist the original filename so the job survives restarts even after the
+    # input video is deleted post-render.
+    try:
+        (d / "meta.json").write_text(
+            json.dumps({"filename": filename}), encoding="utf-8"
+        )
+    except Exception:
+        pass
     _STORE[job_id] = job
     return job
 
@@ -142,24 +150,39 @@ def rehydrate_jobs() -> None:
         if job_id in _STORE:
             continue
         inputs = sorted(d.glob("input.*"))
-        if not inputs:
+        out = d / "output.mp4"
+        wj = d / "words.json"
+        # Keep a job if it has anything meaningful: the original input, a
+        # finished render, or a transcription. (Rendered jobs lose their input
+        # because it's deleted to save space — they must NOT be dropped.)
+        if not inputs and not out.exists() and not wj.exists():
             continue
-        video = inputs[0]
-        job = Job(id=job_id, filename=video.name)
+        # Recover the original filename from meta.json when the input is gone.
+        filename = inputs[0].name if inputs else "video.mp4"
+        meta = d / "meta.json"
+        if meta.exists():
+            try:
+                filename = json.loads(meta.read_text(encoding="utf-8")).get("filename", filename)
+            except Exception:
+                pass
+        video = inputs[0] if inputs else None
+        job = Job(id=job_id, filename=filename)
         job.created_at = d.stat().st_mtime
         job.video_path = video
         job.audio_path = d / "audio.wav"
-        job.words_path = d / "words.json"
+        job.words_path = wj
         job.ass_path = d / "captions.ass"
-        job.output_path = d / "output.mp4"
-        try:
-            info = probe_video(video)
-            job.width = info["width"]
-            job.height = info["height"]
-            job.fps = info["fps"]
-            job.duration = info["duration"]
-        except Exception:
-            pass
+        job.output_path = out
+        probe_target = video if video else (out if out.exists() else None)
+        if probe_target is not None:
+            try:
+                info = probe_video(probe_target)
+                job.width = info["width"]
+                job.height = info["height"]
+                job.fps = info["fps"]
+                job.duration = info["duration"]
+            except Exception:
+                pass
         if job.output_path.exists():
             job.stage = Stage.DONE
             job.progress = 1.0
