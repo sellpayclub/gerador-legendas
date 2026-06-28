@@ -2,18 +2,23 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { ArrowLeft, Loader2, Sparkles, Type, ScrollText, Wand2 } from "lucide-react";
+import { ArrowLeft, LayoutTemplate, Loader2, Sparkles, Type, ScrollText, Wand2 } from "lucide-react";
 import VideoPreview from "@/components/VideoPreview";
 import StylePicker from "@/components/StylePicker";
 import TranscriptEditor from "@/components/TranscriptEditor";
+import TemplatePanel from "@/components/TemplatePanel";
+import TemplatePreview from "@/components/TemplatePreview";
 import {
   getJob,
   getWords,
+  listTemplates,
   saveWords,
   startRender,
   startTranscribe,
   type JobState,
+  type ResolutionInfo,
   type StyleConfig,
+  type TemplateInfo,
   type Word,
   type WordsData,
 } from "@/lib/api";
@@ -42,7 +47,7 @@ const DEFAULT_STYLE: StyleConfig = {
   word_spacing: 4,
 };
 
-type Tab = "style" | "transcript";
+type Tab = "style" | "transcript" | "template";
 
 export default function EditorPage() {
   const params = useParams<{ jobId: string }>();
@@ -58,11 +63,32 @@ export default function EditorPage() {
   const [tab, setTab] = useState<Tab>("style");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Template / composition state
+  const [templates, setTemplates] = useState<TemplateInfo[]>([]);
+  const [resolutions, setResolutions] = useState<ResolutionInfo[]>([]);
+  const [selectedTemplate, setSelectedTemplate] = useState<string | null>(null);
+  const [resolution, setResolution] = useState<"480p" | "720p" | "1080p">("1080p");
+  const [overlayAsset, setOverlayAsset] = useState<string | null>(null);
+  const [keywords, setKeywords] = useState<number[]>([]);
   const [rendering, setRendering] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
 
   const videoControlsRef = useRef<{ seek: (t: number) => void; getCurrentTime: () => number } | null>(null);
   const retriedTranscribe = useRef(false);
+
+  // Load template list once.
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      try {
+        const r = await listTemplates();
+        if (!active) return;
+        setTemplates(r.templates ?? []);
+        setResolutions(r.resolutions ?? []);
+      } catch { /* ignore */ }
+    })();
+    return () => { active = false; };
+  }, []);
 
   // Initial fetch + decide whether to start transcribing
   useEffect(() => {
@@ -169,6 +195,14 @@ export default function EditorPage() {
 
   const handleRender = async () => {
     if (!wordsData) return;
+    if (selectedTemplate) {
+      const tpl = templates.find(t => t.id === selectedTemplate);
+      if (tpl?.needs_overlay && !overlayAsset) {
+        alert("Este template exige uma mídia (imagem/vídeo). Envie uma na aba Template.");
+        setRendering(false);
+        return;
+      }
+    }
     setRendering(true);
     await startRender(jobId, {
       preset: null,
@@ -176,6 +210,10 @@ export default function EditorPage() {
       words_per_line: wordsPerLine,
       pos_x: position.x,
       pos_y: position.y,
+      template: selectedTemplate,
+      resolution,
+      keywords: selectedTemplate ? keywords : null,
+      overlay_asset: selectedTemplate ? overlayAsset : null,
     });
     router.push(`/render/${jobId}`);
   };
@@ -220,10 +258,21 @@ export default function EditorPage() {
       </div>
 
       <div className="flex min-h-0 flex-1 flex-row gap-3 overflow-hidden">
-        {/* Esquerda: vídeo sempre visível */}
+        {/* Esquerda: vídeo/template sempre visível */}
         <div className="flex min-h-0 min-w-0 flex-1 flex-col items-center justify-center gap-2 overflow-hidden rounded-xl border border-border bg-panel/30 p-3">
           <div className="flex min-h-0 w-full flex-1 items-center justify-center overflow-hidden">
-            {job && (
+            {job && selectedTemplate && templates.find(t => t.id === selectedTemplate) ? (
+              <TemplatePreview
+                jobId={jobId}
+                template={templates.find(t => t.id === selectedTemplate)!}
+                overlayAsset={overlayAsset}
+                words={words}
+                style={style}
+                wordsPerLine={wordsPerLine}
+                currentTime={currentTime}
+                registerControls={(c) => (videoControlsRef.current = c)}
+              />
+            ) : job && (
               <VideoPreview
                 jobId={jobId}
                 width={job.width}
@@ -251,12 +300,28 @@ export default function EditorPage() {
         {/* Direita: ajustes com scroll próprio */}
         <div className="flex min-h-0 w-[340px] shrink-0 flex-col overflow-hidden rounded-xl border border-border bg-panel sm:w-[380px] xl:w-[440px]">
           <div className="flex shrink-0 border-b border-border">
+            <TabButton active={tab === "template"} onClick={() => setTab("template")} icon={<LayoutTemplate className="h-4 w-4" />} label="Template" />
             <TabButton active={tab === "style"} onClick={() => setTab("style")} icon={<Type className="h-4 w-4" />} label="Estilo" />
             <TabButton active={tab === "transcript"} onClick={() => setTab("transcript")} icon={<ScrollText className="h-4 w-4" />} label="Transcrição" />
           </div>
 
           <div className="min-h-0 flex-1 overflow-y-auto">
-            {tab === "style" ? (
+            {tab === "template" ? (
+              <TemplatePanel
+                jobId={jobId}
+                templates={templates}
+                resolutions={resolutions}
+                selectedTemplate={selectedTemplate}
+                onTemplateChange={setSelectedTemplate}
+                resolution={resolution}
+                onResolutionChange={setResolution}
+                overlayAsset={overlayAsset}
+                onOverlayAssetChange={setOverlayAsset}
+                keywords={keywords}
+                onKeywordsChange={setKeywords}
+                words={words}
+              />
+            ) : tab === "style" ? (
               <div className="p-4">
                 <StylePicker
                   style={style}

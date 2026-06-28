@@ -19,6 +19,9 @@ from presets import StyleConfig, apply_preset, list_presets
 from ass_gen import generate_ass
 from render import render_video
 from transcribe import transcribe
+import templates
+from templates import get_template
+import keywords
 
 app = FastAPI(title="Legendas Locais")
 
@@ -69,6 +72,15 @@ class RenderRequest(BaseModel):
     words_per_line: int = 3
     pos_x: float | None = None
     pos_y: float | None = None
+    # Templates & composition (all optional -> backward compatible):
+    template: str | None = None        # "reels_split" | "ig_square" | None
+    resolution: str = "1080p"          # "480p" | "720p" | "1080p"
+    keywords: list[int] | None = None  # word indices to zoom on; None = no zoom
+    overlay_asset: str | None = None   # filename uploaded via /assets
+
+
+class KeywordsUpdate(BaseModel):
+    indices: list[int]
 
 
 # ---------- routes ----------
@@ -81,6 +93,127 @@ async def health() -> dict:
 @app.get("/api/presets")
 async def presets_list() -> dict:
     return list_presets()
+
+
+@app.get("/api/templates")
+async def templates_list() -> dict:
+    return {"templates": templates.list_templates(), "resolutions": templates.list_resolutions()}
+
+
+# Allowed file types for template overlay assets.
+_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"}
+_VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".webm", ".m4v"}
+_ASSET_EXTS = _IMAGE_EXTS | _VIDEO_EXTS
+
+
+@app.post("/api/jobs/{job_id}/assets")
+async def upload_asset(job_id: str, file: UploadFile = File(...)) -> dict:
+    job = get_job(job_id)
+    if not job:
+        raise HTTPException(404, "job not found")
+    if not file.filename:
+        raise HTTPException(400, "filename is required")
+    suffix = Path(file.filename).suffix.lower()
+    if suffix not in _ASSET_EXTS:
+        raise HTTPException(400, f"Tipo não suportado: {suffix}. Use imagem ou vídeo.")
+    assets_dir = job.job_dir() / "assets"
+    assets_dir.mkdir(parents=True, exist_ok=True)
+    # Sanitize filename: keep original name but strip path separators.
+    safe_name = Path(file.filename).name
+    # Avoid collisions with random suffix.
+    if (assets_dir / safe_name).exists():
+        stem = Path(safe_name).stem
+        safe_name = f"{stem}_{uuid.uuid4().hex[:6]}{suffix}"
+    target = assets_dir / safe_name
+    with open(target, "wb") as fh:
+        while chunk := await file.read(1 << 20):
+            fh.write(chunk)
+    kind = "video" if suffix in _VIDEO_EXTS else "image"
+    return {"filename": safe_name, "kind": kind, "size": target.stat().st_size}
+
+
+@app.get("/api/jobs/{job_id}/assets")
+async def list_assets(job_id: str) -> dict:
+    job = get_job(job_id)
+    if not job:
+        raise HTTPException(404, "job not found")
+    assets_dir = job.job_dir() / "assets"
+    if not assets_dir.exists():
+        return {"assets": []}
+    out = []
+    for p in sorted(assets_dir.iterdir()):
+        if not p.is_file():
+            continue
+        suffix = p.suffix.lower()
+        kind = "video" if suffix in _VIDEO_EXTS else "image" if suffix in _IMAGE_EXTS else None
+        if kind is None:
+            continue
+        out.append({"filename": p.name, "kind": kind, "size": p.stat().st_size})
+    return {"assets": out}
+
+
+@app.delete("/api/jobs/{job_id}/assets/{filename}")
+async def delete_asset(job_id: str, filename: str) -> dict:
+    job = get_job(job_id)
+    if not job:
+        raise HTTPException(404, "job not found")
+    safe = Path(filename).name
+    target = job.job_dir() / "assets" / safe
+    if not target.exists() or not target.is_file():
+        raise HTTPException(404, "asset not found")
+    try:
+        target.unlink()
+    except OSError as e:
+        raise HTTPException(500, f"erro ao apagar: {e}")
+    return {"ok": True, "deleted": safe}
+
+
+@app.get("/api/jobs/{job_id}/assets/{filename}")
+async def serve_asset(job_id: str, filename: str) -> FileResponse:
+    job = get_job(job_id)
+    if not job:
+        raise HTTPException(404, "job not found")
+    safe = Path(filename).name
+    target = job.job_dir() / "assets" / safe
+    if not target.exists() or not target.is_file():
+        raise HTTPException(404, "asset not found")
+    return FileResponse(str(target))
+
+
+@app.get("/api/jobs/{job_id}/keywords")
+async def get_keywords(job_id: str) -> dict:
+    job = get_job(job_id)
+    if not job:
+        raise HTTPException(404, "job not found")
+    if not job.words_path or not job.words_path.exists():
+        raise HTTPException(400, "transcribe first")
+    try:
+        data = json.loads(job.words_path.read_text(encoding="utf-8"))
+    except Exception:
+        raise HTTPException(500, "words.json inválido")
+    words = data.get("words", [])
+    try:
+        result = keywords.detect_keywords(words, job.job_dir(), job.language)
+    except Exception as e:
+        raise HTTPException(502, f"Falha ao detectar palavras-chave: {e}")
+    return result
+
+
+@app.put("/api/jobs/{job_id}/keywords")
+async def save_keywords_route(job_id: str, body: KeywordsUpdate) -> dict:
+    job = get_job(job_id)
+    if not job:
+        raise HTTPException(404, "job not found")
+    if not job.words_path or not job.words_path.exists():
+        raise HTTPException(400, "transcribe first")
+    try:
+        data = json.loads(job.words_path.read_text(encoding="utf-8"))
+    except Exception:
+        raise HTTPException(500, "words.json inválido")
+    n = len(data.get("words", []))
+    # Validate indices before persisting.
+    clean = sorted({i for i in body.indices if isinstance(i, int) and 0 <= i < n})
+    return keywords.save_manual(job.job_dir(), clean)
 
 
 @app.post("/api/jobs")
@@ -247,12 +380,32 @@ async def _run_render(job: Job, body: RenderRequest) -> None:
         if body.pos_y is not None:
             cfg.pos_y = body.pos_y
 
+        tpl = get_template(body.template)
+
+        # Validate template requirements early so we don't waste a render.
+        overlay_path: Path | None = None
+        if tpl:
+            if tpl.needs_overlay and not body.overlay_asset:
+                raise RuntimeError("Este template exige uma mídia (imagem/vídeo) upada.")
+            if body.overlay_asset:
+                candidate = job.job_dir() / "assets" / Path(body.overlay_asset).name
+                if not candidate.exists():
+                    raise RuntimeError(f"Mídia não encontrada: {body.overlay_asset}")
+                overlay_path = candidate
+
         job.update(Stage.GENERATING_ASS, 0.0, "Gerando legendas ASS")
         data = json.loads(job.words_path.read_text(encoding="utf-8"))
-        # Authoritative dims come from the probed Job, not words.json (which may
-        # lack them and would otherwise fall back to a 1920x1080 default).
-        data["width"] = job.width
-        data["height"] = job.height
+        # When a template is active, the ASS canvas matches the template (e.g.
+        # 1080x1920) so subtitle \pos coordinates line up with the composed
+        # output. Otherwise we use the probed input dims as before.
+        if tpl:
+            data["width"] = tpl.width
+            data["height"] = tpl.height
+            if body.pos_y is None:
+                cfg.pos_y = float(tpl.subtitle_safe_y)
+        else:
+            data["width"] = job.width
+            data["height"] = job.height
         data["fps"] = job.fps
         await asyncio.to_thread(
             generate_ass, data, cfg, body.words_per_line, job.ass_path
@@ -262,23 +415,34 @@ async def _run_render(job: Job, body: RenderRequest) -> None:
         def on_progress(p: float, msg: str) -> None:
             job.update(Stage.RENDERING, p, msg)
 
-        def work() -> None:
-            render_video(
-                job.video_path, job.ass_path, job.output_path,
-                duration=job.duration, on_progress=on_progress,
-            )
+        if tpl:
+            # Import here so Fase 1 stays runnable before compose.py exists.
+            import compose
+            def work() -> None:
+                compose.render_compose(
+                    job.video_path, overlay_path, job.ass_path, job.output_path,
+                    tpl, body.keywords, body.resolution,
+                    duration=job.duration, on_progress=on_progress,
+                )
+        else:
+            def work() -> None:
+                render_video(
+                    job.video_path, job.ass_path, job.output_path,
+                    duration=job.duration, on_progress=on_progress,
+                )
 
         job.update(Stage.RENDERING, 0.0, "Renderizando vídeo")
         await asyncio.to_thread(work)
         job.update(Stage.DONE, 1.0, "Pronto")
-        # Don't hoard videos: the rendered output.mp4 is all we need to keep for
-        # download. Remove the raw upload and the extracted audio right away.
-        for p in (job.video_path, job.audio_path):
-            try:
-                if p and p.exists():
-                    p.unlink()
-            except OSError:
-                pass
+        # Keep the input video and audio so the user can re-render with a
+        # different template/style/keywords. Disk usage is bounded by
+        # cleanup_old_jobs (12h max age). Only the extracted audio is disposable
+        # since we can re-extract it from the input if needed.
+        try:
+            if job.audio_path and job.audio_path.exists():
+                job.audio_path.unlink()
+        except OSError:
+            pass
     except Exception as e:
         job.update(Stage.ERROR, 0.0, f"render falhou: {e}")
 

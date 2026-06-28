@@ -51,6 +51,38 @@ export type RenderRequest = {
   words_per_line: number;
   pos_x?: number | null;
   pos_y?: number | null;
+  // Templates & composition (Fase 4):
+  template?: string | null;
+  resolution?: "480p" | "720p" | "1080p";
+  keywords?: number[] | null;
+  overlay_asset?: string | null;
+};
+
+export type Region = { x: number; y: number; w: number; h: number };
+
+export type TemplateInfo = {
+  id: string;
+  name: string;
+  description: string;
+  aspect: string;
+  width: number;
+  height: number;
+  overlay_region: Region;
+  video_region: Region;
+  subtitle_safe_y: number;
+  needs_overlay: boolean;
+  overlay_accepts: string[];
+};
+
+export type ResolutionInfo = { id: string; label: string; short_edge: number };
+
+export type AssetInfo = { filename: string; kind: "image" | "video"; size: number };
+
+export type KeywordsResult = {
+  indices: number[];
+  words_preview: string[];
+  manual: boolean;
+  model: string;
 };
 
 async function jsonOrThrow<T>(res: Response): Promise<T> {
@@ -123,4 +155,41 @@ export function eventsUrl(jobId: string): string {
 
 export async function listPresets(): Promise<{ presets: { id: string; name: string; values: any }[] }> {
   return jsonOrThrow(await fetch(`/api/presets`));
+}
+
+export async function listTemplates(): Promise<{ templates: TemplateInfo[]; resolutions: ResolutionInfo[] }> {
+  return jsonOrThrow(await fetch(`/api/templates`));
+}
+
+export async function listAssets(jobId: string): Promise<{ assets: AssetInfo[] }> {
+  return jsonOrThrow(await fetch(`/api/jobs/${jobId}/assets`));
+}
+
+export async function uploadAsset(jobId: string, file: File): Promise<{ filename: string; kind: string; size: number }> {
+  const form = new FormData();
+  form.append("file", file);
+  const res = await fetch(`/api/jobs/${jobId}/assets`, { method: "POST", body: form });
+  return jsonOrThrow(res);
+}
+
+export async function deleteAsset(jobId: string, filename: string): Promise<{ ok: boolean }> {
+  return jsonOrThrow(await fetch(`/api/jobs/${jobId}/assets/${encodeURIComponent(filename)}`, { method: "DELETE" }));
+}
+
+export function assetUrl(jobId: string, filename: string): string {
+  return `/api/jobs/${jobId}/assets/${encodeURIComponent(filename)}`;
+}
+
+export async function getKeywords(jobId: string): Promise<KeywordsResult> {
+  return jsonOrThrow(await fetch(`/api/jobs/${jobId}/keywords`));
+}
+
+export async function saveKeywords(jobId: string, indices: number[]): Promise<{ indices: number[]; manual: boolean }> {
+  return jsonOrThrow(
+    await fetch(`/api/jobs/${jobId}/keywords`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ indices }),
+    })
+  );
 }
