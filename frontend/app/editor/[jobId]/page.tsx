@@ -82,8 +82,16 @@ export default function EditorPage() {
             retriedTranscribe.current = true;
             await startTranscribe(jobId);
           }
-        } else if (j.stage === "audio_ready" || j.stage === "queued") {
-          await startTranscribe(jobId);
+        } else if (j.stage === "error") {
+          setError(j.message || "Falha ao processar o vídeo.");
+        } else if (j.stage === "audio_ready") {
+          // Backend auto-transcribes new uploads; this is a fallback for jobs
+          // that already have audio but no transcription (e.g. after restart).
+          try {
+            await startTranscribe(jobId);
+          } catch {
+            /* already running */
+          }
         }
       } catch (e: any) {
         setError(e.message ?? "erro");
@@ -100,6 +108,9 @@ export default function EditorPage() {
   const { job: liveJob } = useJobEvents(jobId, true);
   useEffect(() => {
     if (liveJob) setJob(liveJob);
+    if (liveJob?.stage === "error") {
+      setError(liveJob.message || "Falha ao processar o vídeo.");
+    }
   }, [liveJob]);
 
   // When transcription completes, fetch words

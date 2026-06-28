@@ -44,6 +44,17 @@ async def _startup() -> None:
     ensure_ffmpeg()
     cleanup_old_jobs()
     rehydrate_jobs()
+    asyncio.create_task(_periodic_cleanup())
+
+
+async def _periodic_cleanup() -> None:
+    """Periodically purge old jobs so videos don't accumulate on disk."""
+    while True:
+        await asyncio.sleep(3600)
+        try:
+            cleanup_old_jobs()
+        except Exception:
+            pass
 
 
 # ---------- schemas ----------
@@ -81,30 +92,47 @@ async def upload_job(
         raise HTTPException(400, "filename is required")
     suffix = Path(file.filename).suffix.lower()
     if suffix not in {".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v"}:
-        raise HTTPException(400, f"unsupported file type: {suffix}")
+        raise HTTPException(400, f"Formato não suportado: {suffix}")
     job_id = uuid.uuid4().hex[:12]
     job = create_job(job_id, file.filename)
     job.language = (language or "auto").strip().lower()
-    # stream upload to disk
+    # stream upload to disk in chunks (the actual upload transfer)
     with open(job.video_path, "wb") as fh:
         while chunk := await file.read(1 << 20):
             fh.write(chunk)
-    job.update(Stage.EXTRACTING_AUDIO, 0.0, "Extraindo audio")
+
+    # Probe is fast (reads headers); do it now so we can reject bad files
+    # immediately and return real dimensions to the client.
     try:
-        info = probe_video(job.video_path)
+        info = await asyncio.to_thread(probe_video, job.video_path)
         job.width, job.height, job.fps, job.duration = (
             info["width"], info["height"], info["fps"], info["duration"]
         )
     except Exception as e:
-        job.update(Stage.ERROR, 0.0, f"ffprobe falhou: {e}")
-        raise HTTPException(500, f"ffprobe falhou: {e}")
+        job.update(Stage.ERROR, 0.0, "Não consegui ler o vídeo enviado.")
+        raise HTTPException(400, f"Não consegui ler o vídeo: {e}")
+
+    if not info.get("has_audio", True):
+        job.update(Stage.ERROR, 0.0, "O vídeo não tem faixa de áudio.")
+        raise HTTPException(400, "O vídeo não tem áudio. Envie um vídeo com som para gerar legendas.")
+
+    # Heavy work (audio extraction + transcription) runs in the background so
+    # the HTTP request returns immediately and the gateway never times out (502).
+    job.update(Stage.QUEUED, 0.0, "Na fila")
+    asyncio.create_task(_process_upload(job))
+    return job.to_dict()
+
+
+async def _process_upload(job: Job) -> None:
+    """Background pipeline: extract audio, then auto-transcribe."""
+    job.update(Stage.EXTRACTING_AUDIO, 0.0, "Extraindo áudio")
     try:
         await asyncio.to_thread(extract_audio, job.video_path, job.audio_path)
     except Exception as e:
-        job.update(Stage.ERROR, 0.0, f"ffmpeg audio falhou: {e}")
-        raise HTTPException(500, f"ffmpeg audio falhou: {e}")
-    job.update(Stage.AUDIO_READY, 1.0, "Audio pronto")
-    return job.to_dict()
+        job.update(Stage.ERROR, 0.0, f"Falha ao extrair áudio: {e}")
+        return
+    job.update(Stage.AUDIO_READY, 1.0, "Áudio pronto")
+    await _run_transcribe(job)
 
 
 @app.get("/api/jobs")
@@ -235,6 +263,14 @@ async def _run_render(job: Job, body: RenderRequest) -> None:
         job.update(Stage.RENDERING, 0.0, "Renderizando vídeo")
         await asyncio.to_thread(work)
         job.update(Stage.DONE, 1.0, "Pronto")
+        # Don't hoard videos: the rendered output.mp4 is all we need to keep for
+        # download. Remove the raw upload and the extracted audio right away.
+        for p in (job.video_path, job.audio_path):
+            try:
+                if p and p.exists():
+                    p.unlink()
+            except OSError:
+                pass
     except Exception as e:
         job.update(Stage.ERROR, 0.0, f"render falhou: {e}")
 

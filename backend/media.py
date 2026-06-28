@@ -69,6 +69,7 @@ def probe_video(path: Path) -> dict:
     data = json.loads(out.stdout)
     streams = data.get("streams", [])
     vs = next((s for s in streams if s.get("codec_type") == "video"), {})
+    has_audio = any(s.get("codec_type") == "audio" for s in streams)
     fmt = data.get("format", {})
     fps = 30.0
     if vs.get("r_frame_rate"):
@@ -82,6 +83,7 @@ def probe_video(path: Path) -> dict:
         "height": int(vs.get("height", 1080)),
         "fps": fps,
         "duration": float(fmt.get("duration", 0.0) or 0.0),
+        "has_audio": has_audio,
     }
 
 

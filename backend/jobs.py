@@ -208,12 +208,26 @@ async def event_stream(job: Job) -> AsyncIterator[str]:
         job.unsubscribe(q)
 
 
-def cleanup_old_jobs(max_age_days: int = 7) -> None:
-    cutoff = time.time() - max_age_days * 86400
+def _dir_last_activity(d: Path) -> float:
+    """Most recent mtime among a job dir and its files (dir mtime alone can be
+    stale when only file contents change)."""
+    latest = d.stat().st_mtime
+    for f in d.iterdir():
+        try:
+            latest = max(latest, f.stat().st_mtime)
+        except OSError:
+            pass
+    return latest
+
+
+def cleanup_old_jobs(max_age_hours: float = 12.0) -> None:
+    """Delete job directories (videos included) older than max_age_hours so the
+    VPS doesn't accumulate uploaded/rendered videos."""
+    cutoff = time.time() - max_age_hours * 3600
     if not ROOT.exists():
         return
     import shutil
     for d in ROOT.iterdir():
-        if d.is_dir() and d.stat().st_mtime < cutoff:
+        if d.is_dir() and _dir_last_activity(d) < cutoff:
             shutil.rmtree(d, ignore_errors=True)
             _STORE.pop(d.name, None)
