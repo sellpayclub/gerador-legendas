@@ -148,6 +148,14 @@ async def job_detail(job_id: str) -> dict:
     return job.to_dict()
 
 
+@app.delete("/api/jobs/{job_id}")
+async def delete_job_route(job_id: str) -> dict:
+    removed = jobs.delete_job(job_id)
+    if not removed:
+        raise HTTPException(404, "job not found")
+    return {"ok": True, "deleted": job_id}
+
+
 @app.get("/api/jobs/{job_id}/events")
 async def job_events(job_id: str) -> StreamingResponse:
     job = get_job(job_id)

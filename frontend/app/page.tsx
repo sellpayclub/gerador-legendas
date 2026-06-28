@@ -1,9 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Upload, Loader2, Film } from "lucide-react";
+import { Upload, Loader2, Film, Trash2 } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { uploadVideo, type JobState } from "@/lib/api";
+import { uploadVideo, deleteJob, type JobState } from "@/lib/api";
 
 const ACCEPTED = [".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v"];
 
@@ -26,15 +26,41 @@ export default function HomePage() {
   const [progress, setProgress] = useState<number | null>(null);
   const [recentJobs, setRecentJobs] = useState<JobState[]>([]);
   const [language, setLanguage] = useState("auto");
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const languageRef = useRef("auto");
   languageRef.current = language;
 
-  useEffect(() => {
-    fetch("/api/jobs")
-      .then((r) => r.json())
-      .then((d: { jobs: JobState[] }) => setRecentJobs(d.jobs ?? []))
-      .catch(() => {});
+  const loadJobs = useCallback(async () => {
+    try {
+      const r = await fetch("/api/jobs");
+      const d: { jobs: JobState[] } = await r.json();
+      setRecentJobs(d.jobs ?? []);
+    } catch {
+      /* ignore */
+    }
   }, []);
+
+  useEffect(() => {
+    loadJobs();
+  }, [loadJobs]);
+
+  const handleDelete = useCallback(
+    async (jobId: string) => {
+      if (!confirm("Apagar este vídeo e seus arquivos? Esta ação não pode ser desfeita.")) {
+        return;
+      }
+      setDeletingId(jobId);
+      try {
+        await deleteJob(jobId);
+        setRecentJobs((jobs) => jobs.filter((j) => j.id !== jobId));
+      } catch {
+        await loadJobs();
+      } finally {
+        setDeletingId(null);
+      }
+    },
+    [loadJobs]
+  );
 
   const handleFile = useCallback(
     async (file: File) => {
@@ -159,18 +185,36 @@ export default function HomePage() {
           <ul className="space-y-2">
             {recentJobs.slice(0, 8).map((j) => (
               <li key={j.id}>
-                <button
-                  onClick={() => router.push(`/editor/${j.id}`)}
-                  className="flex w-full items-center gap-3 rounded-lg border border-border bg-panel px-4 py-3 text-left hover:border-accent/50"
-                >
-                  <Film className="h-5 w-5 text-accent" />
-                  <div className="flex-1 truncate">
-                    <div className="truncate text-sm">{j.filename}</div>
-                    <div className="text-xs text-zinc-500">
-                      {j.stage} · {Math.round(j.duration / 60)} min
+                <div className="flex w-full items-center gap-3 rounded-lg border border-border bg-panel px-4 py-3 hover:border-accent/50">
+                  <button
+                    onClick={() => router.push(`/editor/${j.id}`)}
+                    className="flex flex-1 items-center gap-3 truncate text-left"
+                  >
+                    <Film className="h-5 w-5 shrink-0 text-accent" />
+                    <div className="flex-1 truncate">
+                      <div className="truncate text-sm">{j.filename}</div>
+                      <div className="text-xs text-zinc-500">
+                        {j.stage} · {Math.round(j.duration / 60)} min
+                      </div>
                     </div>
-                  </div>
-                </button>
+                  </button>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleDelete(j.id);
+                    }}
+                    disabled={deletingId === j.id}
+                    title="Apagar vídeo"
+                    aria-label="Apagar vídeo"
+                    className="shrink-0 rounded-md p-2 text-zinc-500 transition hover:bg-red-500/10 hover:text-red-400 disabled:opacity-40"
+                  >
+                    {deletingId === j.id ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Trash2 className="h-4 w-4" />
+                    )}
+                  </button>
+                </div>
               </li>
             ))}
           </ul>

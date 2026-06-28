@@ -73,6 +73,10 @@ export async function getJob(jobId: string): Promise<JobState> {
   return jsonOrThrow<JobState>(await fetch(`/api/jobs/${jobId}`));
 }
 
+export async function deleteJob(jobId: string): Promise<{ ok: boolean }> {
+  return jsonOrThrow(await fetch(`/api/jobs/${jobId}`, { method: "DELETE" }));
+}
+
 export async function startTranscribe(jobId: string): Promise<{ ok: boolean }> {
   return jsonOrThrow(await fetch(`/api/jobs/${jobId}/transcribe`, { method: "POST" }));
 }

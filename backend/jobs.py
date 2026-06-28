@@ -117,6 +117,18 @@ def list_jobs() -> list[Job]:
     return sorted(_STORE.values(), key=lambda j: -j.created_at)
 
 
+def delete_job(job_id: str) -> bool:
+    """Remove a job from the store and delete its files on disk.
+    Returns True if a directory or store entry was removed."""
+    import shutil
+    removed = _STORE.pop(job_id, None) is not None
+    d = ROOT / job_id
+    if d.exists() and d.is_dir():
+        shutil.rmtree(d, ignore_errors=True)
+        removed = True
+    return removed
+
+
 def rehydrate_jobs() -> None:
     """Reload jobs from disk so restarts don't lose the job list."""
     if not ROOT.exists():
