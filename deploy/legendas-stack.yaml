@@ -5,9 +5,11 @@ services:
     image: nginx:alpine
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    configs:
-      - source: legendas_nginx_conf
-        target: /etc/nginx/conf.d/default.conf
+    # Bind-mount the conf from the repo path on the host so config changes are
+    # picked up on redeploy (Docker Swarm `configs` are immutable and block
+    # updates when the content changes).
+    volumes:
+      - /opt/legendas-locais/deploy/legendas-nginx.conf:/etc/nginx/conf.d/default.conf:ro
     networks:
       - clonefy
     deploy:
@@ -24,10 +26,6 @@ services:
         - "traefik.http.services.legendas.loadbalancer.server.port=80"
         - "traefik.docker.network=clonefy"
         - "traefik.http.routers.legendas.priority=1"
-
-configs:
-  legendas_nginx_conf:
-    file: ./legendas-nginx.conf
 
 networks:
   clonefy:

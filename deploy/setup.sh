@@ -60,6 +60,8 @@ systemctl disable nginx 2>/dev/null || true
 systemctl stop nginx 2>/dev/null || true
 cd "$APP_DIR/deploy"
 docker stack deploy -c legendas-stack.yaml legendas
+# Force the proxy to restart so the bind-mounted nginx.conf is reloaded.
+docker service update --force legendas_legendas-proxy >/dev/null 2>&1 || true
 
 echo ""
 echo "============================================"
