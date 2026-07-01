@@ -59,6 +59,12 @@ systemctl enable legendas-backend legendas-frontend
 systemctl restart legendas-backend legendas-frontend
 
 echo "==> Traefik reverse proxy (Docker Swarm)..."
+for d in /etc/traefik/dynamic /opt/traefik/dynamic /root/traefik/dynamic; do
+  if [[ -d "$d" ]]; then
+    cp "$APP_DIR/deploy/traefik-dynamic-legendas.yml" "$d/legendas-locais.yml"
+    echo "    Traefik dynamic: $d/legendas-locais.yml"
+  fi
+done
 systemctl disable nginx 2>/dev/null || true
 systemctl stop nginx 2>/dev/null || true
 cd "$APP_DIR/deploy"

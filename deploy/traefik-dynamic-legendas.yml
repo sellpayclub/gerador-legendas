@@ -1,0 +1,18 @@
+# Traefik file provider — long timeouts for video upload (2 GB).
+# Copy to Traefik's dynamic config dir (e.g. /etc/traefik/dynamic/).
+# setup.sh tries common paths automatically.
+
+http:
+  serversTransports:
+    legendas-long:
+      forwardingTimeouts:
+        dialTimeout: 30s
+        responseHeaderTimeout: 3600s
+        idleTimeout: 3600s
+
+  middlewares:
+    legendas-upload:
+      buffering:
+        maxRequestBodyBytes: 2147483648
+        memRequestBodyBytes: 104857600
+        maxResponseBodyBytes: 0

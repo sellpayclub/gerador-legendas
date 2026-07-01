@@ -24,6 +24,9 @@ services:
         - "traefik.http.routers.legendas.tls.certresolver=letsencryptresolver"
         - "traefik.http.routers.legendas.service=legendas"
         - "traefik.http.services.legendas.loadbalancer.server.port=80"
+        - "traefik.http.middlewares.legendas-upload-buffer.buffering.maxRequestBodyBytes=2147483648"
+        - "traefik.http.middlewares.legendas-upload-buffer.buffering.memRequestBodyBytes=104857600"
+        - "traefik.http.routers.legendas.middlewares=legendas-upload-buffer"
         - "traefik.docker.network=clonefy"
         - "traefik.http.routers.legendas.priority=1"
 

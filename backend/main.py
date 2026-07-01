@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import uuid
 from pathlib import Path
@@ -448,13 +449,21 @@ async def upload_job(
     job_id = uuid.uuid4().hex[:12]
     job = create_job(job_id, file.filename, mode=job_mode)
     job.language = (language or "auto").strip().lower()
-    # stream upload to disk in chunks (the actual upload transfer)
+    # Stream upload to disk in chunks (the actual upload transfer)
     with open(job.video_path, "wb") as fh:
         while chunk := await file.read(1 << 20):
             fh.write(chunk)
 
-    # Probe is fast (reads headers); do it now so we can reject bad files
-    # immediately and return real dimensions to the client.
+    # Return immediately after the file is saved — probe/extract/transcribe run in
+    # background so Traefik/nginx never 502 while ffprobe runs on large files.
+    job.update(Stage.QUEUED, 0.0, "Upload concluído — processando...")
+    asyncio.create_task(_process_upload(job))
+    return job.to_dict()
+
+
+async def _process_upload(job: Job) -> None:
+    """Background: validate video, extract audio, then auto-transcribe."""
+    job.update(Stage.QUEUED, 0.02, "Validando vídeo...")
     try:
         info = await asyncio.to_thread(probe_video, job.video_path)
         job.width, job.height, job.fps, job.duration = (
@@ -462,21 +471,13 @@ async def upload_job(
         )
     except Exception as e:
         job.update(Stage.ERROR, 0.0, "Não consegui ler o vídeo enviado.")
-        raise HTTPException(400, f"Não consegui ler o vídeo: {e}")
+        logging.getLogger("legendas").warning("probe failed for %s: %s", job.id, e)
+        return
 
     if not info.get("has_audio", True):
         job.update(Stage.ERROR, 0.0, "O vídeo não tem faixa de áudio.")
-        raise HTTPException(400, "O vídeo não tem áudio. Envie um vídeo com som para gerar legendas.")
+        return
 
-    # Heavy work (audio extraction + transcription) runs in the background so
-    # the HTTP request returns immediately and the gateway never times out (502).
-    job.update(Stage.QUEUED, 0.0, "Na fila")
-    asyncio.create_task(_process_upload(job))
-    return job.to_dict()
-
-
-async def _process_upload(job: Job) -> None:
-    """Background pipeline: extract audio, then auto-transcribe."""
     job.update(Stage.EXTRACTING_AUDIO, 0.0, "Extraindo áudio")
     try:
         await asyncio.to_thread(extract_audio, job.video_path, job.audio_path)

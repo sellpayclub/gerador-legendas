@@ -116,6 +116,25 @@ dig +short legendas.clonefyia.com
 |----------|------|
 | Site 502 | `systemctl restart legendas-backend legendas-frontend` |
 | SSL falhou | Conferir DNS; Traefik emite cert ao primeiro acesso HTTPS |
-| Upload grande falha | Proxy nginx em `deploy/legendas-nginx.conf` — `client_max_body_size 2048M` |
+| Upload grande falha / **502 no upload** | Ver abaixo — Traefik timeout + proxy nginx |
 | Jobs sumiram após restart | Backend rehydrata de `data/jobs/` no startup — conferir se pasta existe |
 | Render falha | `ffmpeg -filters \| grep ass` na VPS — precisa libass |
+
+### 502 no upload (vídeo grande)
+
+1. Atualize o código e rode `bash deploy/setup.sh --update` (nginx + middleware Traefik).
+2. Confira backend: `systemctl status legendas-backend` e `journalctl -u legendas-backend -n 50`.
+3. Confira disco: `df -h /opt/legendas-locais/data`.
+4. Se ainda falhar, aumente timeout do **Traefik** (entrypoint `websecure`) no `traefik.yml` da VPS:
+
+```yaml
+entryPoints:
+  websecure:
+    transport:
+      respondingTimeouts:
+        readTimeout: 0
+        writeTimeout: 0
+        idleTimeout: 3600s
+```
+
+5. Copie `deploy/traefik-dynamic-legendas.yml` para a pasta dynamic do Traefik e reinicie o Traefik.

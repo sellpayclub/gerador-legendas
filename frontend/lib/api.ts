@@ -159,7 +159,12 @@ export type KeywordsResult = {
 async function jsonOrThrow<T>(res: Response): Promise<T> {
   if (!res.ok) {
     const text = await res.text().catch(() => res.statusText);
-    throw new Error(`${res.status}: ${text}`);
+    if (res.status === 502) {
+      throw new Error(
+        "502: O servidor cortou a conexão (upload grande ou timeout). Tente de novo — se persistir, atualize a VPS.",
+      );
+    }
+    throw new Error(`${res.status}: ${text.slice(0, 200)}`);
   }
   return res.json() as Promise<T>;
 }
