@@ -8,6 +8,10 @@ import ClipListPanel from "@/components/ClipListPanel";
 import ClipBoundsEditor from "@/components/ClipBoundsEditor";
 import CortesStepBar, { type CortesStep } from "@/components/CortesStepBar";
 import ClipExportPanel from "@/components/ClipExportPanel";
+import ClipFormatPicker, {
+  CORTES_VERTICAL,
+  defaultPositionForAspect,
+} from "@/components/ClipFormatPicker";
 import StylePicker from "@/components/StylePicker";
 import TranscriptEditor from "@/components/TranscriptEditor";
 import HighlightPanel from "@/components/HighlightPanel";
@@ -302,6 +306,16 @@ export default function CortesPage() {
     }));
   }, [step, highlightEnabled, previewClip, clipWords, clipKeywords]);
 
+  const previewSize = useMemo(() => {
+    if (step >= 2 && aspect === "vertical") {
+      return { width: CORTES_VERTICAL.width, height: CORTES_VERTICAL.height };
+    }
+    return {
+      width: wordsData?.width ?? 1920,
+      height: wordsData?.height ?? 1080,
+    };
+  }, [step, aspect, wordsData]);
+
   /** Seek into clip / first highlight so preview shows destaque immediately. */
   useEffect(() => {
     if (step < 2 || !previewClip) return;
@@ -338,8 +352,8 @@ export default function CortesPage() {
         await saveClipsSettings(jobId, {
           style: {
             ...stylePayload,
-            pos_x: position.x,
-            pos_y: position.y,
+            pos_x: stylePayload.pos_x ?? position.x,
+            pos_y: stylePayload.pos_y ?? position.y,
           },
           words_per_line: patch.words_per_line ?? wordsPerLine,
           aspect: patch.aspect ?? aspect,
@@ -359,6 +373,21 @@ export default function CortesPage() {
     }, 800);
     return () => clearTimeout(t);
   }, [style, wordsPerLine, aspect, position, highlightEnabled, settingsReady, persistSettings]);
+
+  const handleAspectChange = useCallback(
+    (next: "original" | "vertical") => {
+      if (next === aspect) return;
+      setAspect(next);
+      const vw = wordsData?.width ?? 1920;
+      const vh = wordsData?.height ?? 1080;
+      const pos = defaultPositionForAspect(next, vw, vh, style.margin_v ?? 120);
+      setPosition(pos);
+      const nextStyle = { ...style, pos_x: pos.x, pos_y: pos.y };
+      setStyle(nextStyle);
+      persistSettings({ aspect: next, style: nextStyle });
+    },
+    [aspect, wordsData, style, persistSettings],
+  );
 
   const handleDetect = async () => {
     setDetecting(true);
@@ -603,8 +632,8 @@ export default function CortesPage() {
           {wordsData && (
             <VideoPreview
               jobId={jobId}
-              width={wordsData.width}
-              height={wordsData.height}
+              width={previewSize.width}
+              height={previewSize.height}
               words={previewWords}
               style={{ ...style, pos_x: position.x, pos_y: position.y }}
               wordsPerLine={wordsPerLine}
@@ -623,7 +652,13 @@ export default function CortesPage() {
                   ? { start: previewClip.start_s, end: previewClip.end_s }
                   : null
               }
+              videoObjectFit={step >= 2 && aspect === "vertical" ? "cover" : "contain"}
             />
+          )}
+          {step >= 2 && (
+            <p className="mt-1 shrink-0 text-center text-[10px] text-zinc-500">
+              Preview em {aspect === "vertical" ? "9:16 vertical" : "formato original"} — arraste a legenda
+            </p>
           )}
         </div>
 
@@ -683,6 +718,14 @@ export default function CortesPage() {
                     </div>
                   )}
 
+                  <div className="border-b border-border bg-panel/40">
+                    <ClipFormatPicker
+                      aspect={aspect}
+                      onChange={handleAspectChange}
+                      compact
+                    />
+                  </div>
+
                   <div className="flex border-b border-border">
                     {(
                       [
@@ -722,8 +765,8 @@ export default function CortesPage() {
                       onChange={setStyle}
                       wordsPerLine={wordsPerLine}
                       onWordsPerLineChange={setWordsPerLine}
-                      videoHeight={wordsData.height}
-                      videoWidth={wordsData.width}
+                      videoHeight={previewSize.height}
+                      videoWidth={previewSize.width}
                       position={position}
                       onPositionChange={(pos) => {
                         setPosition(pos);
@@ -794,14 +837,14 @@ export default function CortesPage() {
                         jobId={jobId}
                         clips={clipList}
                         aspect={aspect}
-                        onAspectChange={(a) => {
-                          setAspect(a);
-                          persistSettings({ aspect: a });
-                        }}
                         onRenderOne={handleRenderOne}
                         onRenderAll={handleRenderAll}
                         renderingAll={renderingAll}
                         renderingIds={renderingIds}
+                        onEditFormat={() => {
+                          setStep(2);
+                          setStep2Tab("style");
+                        }}
                       />
                     </>
                   )}

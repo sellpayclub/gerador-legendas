@@ -43,6 +43,8 @@ type Props = {
   highlightPhrases?: HighlightPhrase[];
   /** Active clip range for Cortes mode — highlights scrubber region. */
   activeClip?: { start: number; end: number } | null;
+  /** When "cover", simulates 9:16 crop (vertical export preview). */
+  videoObjectFit?: "contain" | "cover";
 };
 
 /**
@@ -70,6 +72,7 @@ export default function VideoPreview({
   highlightEnabled = false,
   highlightPhrases = [],
   activeClip = null,
+  videoObjectFit = "contain",
 }: Props & { isPlaceholder?: boolean }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const overlayRef = useRef<HTMLDivElement>(null);
@@ -255,7 +258,9 @@ export default function VideoPreview({
         <video
           ref={videoRef}
           src={`/api/jobs/${jobId}/video`}
-          className="h-full w-full object-contain transition-[filter] duration-200"
+          className={`h-full w-full transition-[filter] duration-200 ${
+            videoObjectFit === "cover" ? "object-cover" : "object-contain"
+          }`}
           style={{
             filter: highlightBlur ? "blur(16px) brightness(0.72) saturate(0.75)" : "none",
           }}

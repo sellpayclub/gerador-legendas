@@ -1,6 +1,6 @@
 "use client";
 
-import { Download, Loader2, Scissors } from "lucide-react";
+import { Download, Loader2, Pencil } from "lucide-react";
 import type { ClipSegment } from "@/lib/api";
 import { clipOutputUrl } from "@/lib/api";
 
@@ -8,11 +8,11 @@ type Props = {
   jobId: string;
   clips: ClipSegment[];
   aspect: "original" | "vertical";
-  onAspectChange: (a: "original" | "vertical") => void;
   onRenderOne: (clipId: string) => void;
   onRenderAll: () => void;
   renderingAll: boolean;
   renderingIds: Set<string>;
+  onEditFormat: () => void;
 };
 
 function fmtDuration(s: number): string {
@@ -25,13 +25,14 @@ export default function ClipExportPanel({
   jobId,
   clips,
   aspect,
-  onAspectChange,
   onRenderOne,
   onRenderAll,
   renderingAll,
   renderingIds,
+  onEditFormat,
 }: Props) {
   const enabled = clips.filter((c) => c.enabled);
+  const formatLabel = aspect === "vertical" ? "9:16 Vertical" : "Original";
 
   return (
     <div className="space-y-4 p-4">
@@ -44,32 +45,19 @@ export default function ClipExportPanel({
         </p>
       </div>
 
-      <div>
-        <p className="mb-2 text-xs font-medium text-zinc-400">Formato de saída</p>
-        <div className="flex gap-2">
-          <button
-            type="button"
-            onClick={() => onAspectChange("vertical")}
-            className={`flex-1 rounded-lg border px-3 py-2 text-xs font-medium transition ${
-              aspect === "vertical"
-                ? "border-accent bg-accent/10 text-accent"
-                : "border-border text-zinc-400 hover:text-zinc-200"
-            }`}
-          >
-            9:16 Vertical
-          </button>
-          <button
-            type="button"
-            onClick={() => onAspectChange("original")}
-            className={`flex-1 rounded-lg border px-3 py-2 text-xs font-medium transition ${
-              aspect === "original"
-                ? "border-accent bg-accent/10 text-accent"
-                : "border-border text-zinc-400 hover:text-zinc-200"
-            }`}
-          >
-            Original
-          </button>
+      <div className="flex items-center justify-between gap-2 rounded-lg border border-border bg-panel/50 px-3 py-2.5">
+        <div>
+          <p className="text-[10px] font-medium uppercase tracking-wide text-zinc-500">Formato</p>
+          <p className="text-sm font-medium text-zinc-200">{formatLabel}</p>
         </div>
+        <button
+          type="button"
+          onClick={onEditFormat}
+          className="flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs text-zinc-400 hover:border-accent/40 hover:text-accent"
+        >
+          <Pencil className="h-3 w-3" />
+          Alterar
+        </button>
       </div>
 
       {enabled.length === 0 && (
@@ -121,35 +109,20 @@ export default function ClipExportPanel({
                     {busy ? (
                       <Loader2 className="h-3.5 w-3.5 animate-spin" />
                     ) : (
-                      <Scissors className="h-3.5 w-3.5" />
+                      <Download className="h-3.5 w-3.5" />
                     )}
-                    Gerar este corte
+                    Gerar MP4
                   </button>
                 )}
                 {ready && (
-                  <>
-                    <video
-                      src={clipOutputUrl(jobId, clip.id)}
-                      controls
-                      className="mb-2 w-full rounded-lg bg-black"
-                    />
-                    <a
-                      href={clipOutputUrl(jobId, clip.id)}
-                      download={`corte_${clip.title.replace(/[^\w\s-]/g, "").slice(0, 40)}.mp4`}
-                      className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-bg"
-                    >
-                      <Download className="h-3.5 w-3.5" />
-                      Baixar MP4
-                    </a>
-                    <button
-                      type="button"
-                      onClick={() => onRenderOne(clip.id)}
-                      disabled={busy || renderingAll}
-                      className="rounded-lg border border-border px-3 py-1.5 text-xs text-zinc-400 hover:text-zinc-200 disabled:opacity-50"
-                    >
-                      Re-gerar
-                    </button>
-                  </>
+                  <a
+                    href={clipOutputUrl(jobId, clip.id)}
+                    download
+                    className="flex items-center gap-1.5 rounded-lg bg-green-500/20 px-3 py-1.5 text-xs font-semibold text-green-300"
+                  >
+                    <Download className="h-3.5 w-3.5" />
+                    Baixar
+                  </a>
                 )}
               </div>
             </li>
@@ -157,19 +130,21 @@ export default function ClipExportPanel({
         })}
       </ul>
 
-      {enabled.length > 1 && (
+      {enabled.length > 0 && (
         <button
           type="button"
           onClick={onRenderAll}
-          disabled={renderingAll || renderingIds.size > 0}
-          className="flex w-full items-center justify-center gap-2 rounded-lg border border-accent/40 bg-accent/5 py-2.5 text-sm font-medium text-accent disabled:opacity-50"
+          disabled={renderingAll || enabled.some((c) => renderingIds.has(c.id))}
+          className="flex w-full items-center justify-center gap-2 rounded-xl bg-accent py-3 text-sm font-bold text-bg disabled:opacity-50"
         >
           {renderingAll ? (
-            <Loader2 className="h-4 w-4 animate-spin" />
+            <>
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Gerando {enabled.length} MP4s...
+            </>
           ) : (
-            <Scissors className="h-4 w-4" />
+            <>Gerar todos ({enabled.length})</>
           )}
-          Gerar todos selecionados ({enabled.length})
         </button>
       )}
     </div>

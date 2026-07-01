@@ -87,7 +87,10 @@ def render_clip(
     if tpl:
         data["width"] = tpl.width
         data["height"] = tpl.height
-        cfg.pos_y = float(tpl.subtitle_safe_y)
+        if cfg.pos_x is None:
+            cfg.pos_x = float(tpl.width / 2)
+        if cfg.pos_y is None:
+            cfg.pos_y = float(tpl.subtitle_safe_y)
     else:
         from media import probe_video
         info = probe_video(raw_path)
