@@ -39,6 +39,9 @@ ALLOWED_ORIGINS=https://legendas.clonefyia.com,http://legendas.clonefyia.com
 EOF
 fi
 
+echo "==> Frontend fonts (local, no Google at build time)..."
+bash "$APP_DIR/scripts/sync-frontend-fonts.sh"
+
 echo "==> Frontend build..."
 cd "$APP_DIR/frontend"
 npm ci --silent 2>/dev/null || npm install --silent

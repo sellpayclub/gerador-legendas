@@ -37,6 +37,7 @@ if [ ! -x "$ROOT/backend/.venv/bin/python" ]; then
 fi
 
 echo "==> Verificando frontend (build de producao)..."
+bash "$ROOT/scripts/sync-frontend-fonts.sh" 2>/dev/null || true
 if [ ! -d "$ROOT/frontend/.next" ]; then
   echo "    Compilando frontend..."
   (cd "$ROOT/frontend" && export PATH="$NODE_BIN:$PATH" && npm install --silent && npm run build)
