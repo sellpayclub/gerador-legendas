@@ -40,6 +40,44 @@ export type ClipSegment = {
   enabled: boolean;
   status: "pending" | "rendering" | "done" | "error";
   error?: string;
+  headline?: string;
+  caption?: string;
+};
+
+export type ExportFormatId =
+  | "original"
+  | "reels_full"
+  | "choquei_image"
+  | "choquei_video";
+
+export type ComposeSettings = {
+  overlay_asset?: string | null;
+  headline_text?: string | null;
+  headline_style?: string;
+  headline_bg?: string;
+  headline_color?: string;
+  headline_font_size?: number;
+  headline_align?: "left" | "center" | "right";
+  headline_max_width_pct?: number;
+  profile_asset?: string | null;
+  instagram_username?: string;
+  instagram_caption?: string;
+  logo_asset?: string | null;
+  logo_x?: number;
+  logo_y?: number;
+  logo_scale?: number;
+  progress_enabled?: boolean;
+  progress_color?: string;
+  progress_height_pct?: number;
+  overlay_pos_x?: number;
+  overlay_pos_y?: number;
+  video_pos_x?: number;
+  video_pos_y?: number;
+  ig_bg_color?: string;
+  ig_text_color?: string;
+  ig_avatar_size?: number;
+  ig_username_size?: number;
+  ig_caption_size?: number;
 };
 
 export type ClipsData = {
@@ -52,18 +90,70 @@ export type ClipsData = {
   preset?: string;
   words_per_line?: number;
   aspect?: "original" | "vertical";
+  template?: string | null;
   resolution?: "480p" | "720p" | "1080p";
   highlight_enabled?: boolean;
+  overlay_asset?: string | null;
+  profile_asset?: string | null;
+  instagram_username?: string;
+  logo_asset?: string | null;
+  logo_x?: number;
+  logo_y?: number;
+  logo_scale?: number;
+  progress_enabled?: boolean;
+  progress_color?: string;
+  progress_height_pct?: number;
+  headline_style?: string;
+  headline_bg?: string;
+  headline_color?: string;
+  headline_font_size?: number;
+  headline_align?: string;
+  headline_max_width_pct?: number;
+  overlay_pos_x?: number;
+  overlay_pos_y?: number;
+  video_pos_x?: number;
+  video_pos_y?: number;
+  ig_bg_color?: string;
+  ig_text_color?: string;
+  ig_avatar_size?: number;
+  ig_username_size?: number;
+  ig_caption_size?: number;
 };
 
 export type ClipsRenderRequest = {
   clip_ids: string[];
   aspect: "original" | "vertical";
+  template?: string | null;
   preset?: string | null;
   custom?: StyleConfig | null;
   words_per_line?: number;
   resolution?: "480p" | "720p" | "1080p";
   highlight_enabled?: boolean;
+  overlay_asset?: string | null;
+  profile_asset?: string | null;
+  instagram_username?: string;
+  logo_asset?: string | null;
+  logo_x?: number;
+  logo_y?: number;
+  logo_scale?: number;
+  progress_enabled?: boolean;
+  progress_color?: string;
+  progress_height_pct?: number;
+  headline_style?: string;
+  headline_bg?: string;
+  headline_color?: string;
+  headline_font_size?: number;
+  headline_align?: string;
+  headline_max_width_pct?: number;
+  overlay_pos_x?: number;
+  overlay_pos_y?: number;
+  video_pos_x?: number;
+  video_pos_y?: number;
+  ig_bg_color?: string;
+  ig_text_color?: string;
+  ig_avatar_size?: number;
+  ig_username_size?: number;
+  ig_caption_size?: number;
 };
 
 export type ClipsSettings = {
@@ -71,8 +161,34 @@ export type ClipsSettings = {
   preset?: string;
   words_per_line?: number;
   aspect?: "original" | "vertical";
+  template?: string | null;
   resolution?: "480p" | "720p" | "1080p";
   highlight_enabled?: boolean;
+  overlay_asset?: string | null;
+  profile_asset?: string | null;
+  instagram_username?: string;
+  logo_asset?: string | null;
+  logo_x?: number;
+  logo_y?: number;
+  logo_scale?: number;
+  progress_enabled?: boolean;
+  progress_color?: string;
+  progress_height_pct?: number;
+  headline_style?: string;
+  headline_bg?: string;
+  headline_color?: string;
+  headline_font_size?: number;
+  headline_align?: string;
+  headline_max_width_pct?: number;
+  overlay_pos_x?: number;
+  overlay_pos_y?: number;
+  video_pos_x?: number;
+  video_pos_y?: number;
+  ig_bg_color?: string;
+  ig_text_color?: string;
+  ig_avatar_size?: number;
+  ig_username_size?: number;
+  ig_caption_size?: number;
 };
 
 export type StyleConfig = {
@@ -116,8 +232,32 @@ export type RenderRequest = {
   keywords?: number[] | null;
   highlight_effects?: Record<string, PhraseEffect> | null;
   overlay_asset?: string | null;
+  profile_asset?: string | null;
   video_pos_x?: number | null;
   video_pos_y?: number | null;
+  headline_text?: string | null;
+  headline_style?: string;
+  headline_bg?: string;
+  headline_color?: string;
+  headline_font_size?: number;
+  headline_align?: string;
+  headline_max_width_pct?: number;
+  instagram_username?: string | null;
+  instagram_caption?: string | null;
+  logo_asset?: string | null;
+  logo_x?: number;
+  logo_y?: number;
+  logo_scale?: number;
+  progress_enabled?: boolean;
+  progress_color?: string;
+  progress_height_pct?: number;
+  overlay_pos_x?: number;
+  overlay_pos_y?: number;
+  ig_bg_color?: string;
+  ig_text_color?: string;
+  ig_avatar_size?: number;
+  ig_username_size?: number;
+  ig_caption_size?: number;
 };
 
 export type Region = { x: number; y: number; w: number; h: number };
@@ -132,8 +272,13 @@ export type TemplateInfo = {
   overlay_region: Region;
   video_region: Region;
   subtitle_safe_y: number;
+  subtitle_safe_x?: number | null;
   needs_overlay: boolean;
   overlay_accepts: string[];
+  layout?: string;
+  header_region?: Region | null;
+  left_panel_region?: Region | null;
+  right_panel_region?: Region | null;
 };
 
 export type ResolutionInfo = { id: string; label: string; short_edge: number };

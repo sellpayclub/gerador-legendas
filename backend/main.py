@@ -26,6 +26,7 @@ import keywords
 import enrich
 import clips
 from clip_render import render_clip
+from overlays import ComposeExtras, InstagramHeader
 
 _clip_detect_running: set[str] = set()
 _clip_render_running: set[str] = set()
@@ -137,8 +138,32 @@ class RenderRequest(BaseModel):
     keywords: list[int] | None = None
     highlight_effects: dict | None = None  # per-phrase: key = first word index
     overlay_asset: str | None = None
+    profile_asset: str | None = None
     video_pos_x: float | None = None
     video_pos_y: float | None = None
+    headline_text: str | None = None
+    headline_style: str = "bold_red"
+    headline_bg: str = "#E31B23"
+    headline_color: str = "#FFFFFF"
+    headline_font_size: int = 42
+    headline_align: str = "center"
+    headline_max_width_pct: float = 0.85
+    instagram_username: str | None = None
+    instagram_caption: str | None = None
+    logo_asset: str | None = None
+    logo_x: float = 0.85
+    logo_y: float = 0.78
+    logo_scale: float = 0.18
+    progress_enabled: bool = False
+    progress_color: str = "#E31B23"
+    progress_height_pct: float = 0.04
+    overlay_pos_x: float = 0.5
+    overlay_pos_y: float = 0.5
+    ig_bg_color: str = "#FFFFFF"
+    ig_text_color: str = "#141414"
+    ig_avatar_size: int = 72
+    ig_username_size: int = 34
+    ig_caption_size: int = 28
 
 
 class KeywordsUpdate(BaseModel):
@@ -160,8 +185,34 @@ class ClipsSettingsUpdate(BaseModel):
     preset: str | None = None
     words_per_line: int | None = None
     aspect: str | None = None
+    template: str | None = None
     resolution: str | None = None
     highlight_enabled: bool | None = None
+    overlay_asset: str | None = None
+    profile_asset: str | None = None
+    instagram_username: str | None = None
+    logo_asset: str | None = None
+    logo_x: float | None = None
+    logo_y: float | None = None
+    logo_scale: float | None = None
+    progress_enabled: bool | None = None
+    progress_color: str | None = None
+    progress_height_pct: float | None = None
+    headline_style: str | None = None
+    headline_bg: str | None = None
+    headline_color: str | None = None
+    headline_font_size: int | None = None
+    headline_align: str | None = None
+    headline_max_width_pct: float | None = None
+    overlay_pos_x: float | None = None
+    overlay_pos_y: float | None = None
+    video_pos_x: float | None = None
+    video_pos_y: float | None = None
+    ig_bg_color: str | None = None
+    ig_text_color: str | None = None
+    ig_avatar_size: int | None = None
+    ig_username_size: int | None = None
+    ig_caption_size: int | None = None
 
 
 class ClipWordsUpdate(BaseModel):
@@ -175,21 +226,177 @@ class ClipKeywordsUpdate(BaseModel):
 
 class ClipsRenderRequest(BaseModel):
     clip_ids: list[str]
-    aspect: str = "original"  # "original" | "vertical"
+    aspect: str = "original"
+    template: str | None = None
     preset: str | None = "capcut_amarelo"
     custom: dict | None = None
     words_per_line: int = 4
     resolution: str = "1080p"
     highlight_enabled: bool = False
+    overlay_asset: str | None = None
+    profile_asset: str | None = None
+    instagram_username: str | None = None
+    logo_asset: str | None = None
+    logo_x: float | None = None
+    logo_y: float | None = None
+    logo_scale: float | None = None
+    progress_enabled: bool | None = None
+    progress_color: str | None = None
+    progress_height_pct: float | None = None
+    headline_style: str | None = None
+    headline_bg: str | None = None
+    headline_color: str | None = None
+    headline_font_size: int | None = None
+    headline_align: str | None = None
+    headline_max_width_pct: float | None = None
+    overlay_pos_x: float | None = None
+    overlay_pos_y: float | None = None
+    video_pos_x: float | None = None
+    video_pos_y: float | None = None
+    ig_bg_color: str | None = None
+    ig_text_color: str | None = None
+    ig_avatar_size: int | None = None
+    ig_username_size: int | None = None
+    ig_caption_size: int | None = None
 
 
 class SingleClipRenderRequest(BaseModel):
     aspect: str = "vertical"
+    template: str | None = None
     preset: str | None = "capcut_amarelo"
     custom: dict | None = None
     words_per_line: int = 4
     resolution: str = "1080p"
     highlight_enabled: bool = False
+    overlay_asset: str | None = None
+    profile_asset: str | None = None
+    instagram_username: str | None = None
+    logo_asset: str | None = None
+    logo_x: float | None = None
+    logo_y: float | None = None
+    logo_scale: float | None = None
+    progress_enabled: bool | None = None
+    progress_color: str | None = None
+    progress_height_pct: float | None = None
+    headline_style: str | None = None
+    headline_bg: str | None = None
+    headline_color: str | None = None
+    headline_font_size: int | None = None
+    headline_align: str | None = None
+    headline_max_width_pct: float | None = None
+    overlay_pos_x: float | None = None
+    overlay_pos_y: float | None = None
+    video_pos_x: float | None = None
+    video_pos_y: float | None = None
+    ig_bg_color: str | None = None
+    ig_text_color: str | None = None
+    ig_avatar_size: int | None = None
+    ig_username_size: int | None = None
+    ig_caption_size: int | None = None
+
+
+def _asset_path(job_dir: Path, filename: str | None) -> Path | None:
+    if not filename:
+        return None
+    p = job_dir / "assets" / Path(filename).name
+    return p if p.exists() else None
+
+
+def _compose_dict_from_saved(saved: dict) -> dict:
+    return {
+        "headline_style": saved.get("headline_style", "bold_red"),
+        "headline_bg": saved.get("headline_bg", "#E31B23"),
+        "headline_color": saved.get("headline_color", "#FFFFFF"),
+        "headline_font_size": saved.get("headline_font_size", 42),
+        "headline_align": saved.get("headline_align", "center"),
+        "headline_max_width_pct": saved.get("headline_max_width_pct", 0.85),
+        "overlay_pos_x": saved.get("overlay_pos_x", 0.5),
+        "overlay_pos_y": saved.get("overlay_pos_y", 0.5),
+        "video_pos_x": saved.get("video_pos_x", 0.5),
+        "video_pos_y": saved.get("video_pos_y", 0.5),
+        "logo_asset": saved.get("logo_asset"),
+        "logo_x": saved.get("logo_x", 0.85),
+        "logo_y": saved.get("logo_y", 0.78),
+        "logo_scale": saved.get("logo_scale", 0.18),
+        "progress_enabled": saved.get("progress_enabled", False),
+        "progress_color": saved.get("progress_color", "#E31B23"),
+        "progress_height_pct": saved.get("progress_height_pct", 0.04),
+        "ig_bg_color": saved.get("ig_bg_color", "#FFFFFF"),
+        "ig_text_color": saved.get("ig_text_color", "#141414"),
+        "ig_avatar_size": saved.get("ig_avatar_size", 72),
+        "ig_username_size": saved.get("ig_username_size", 34),
+        "ig_caption_size": saved.get("ig_caption_size", 28),
+        "instagram": {
+            "profile_asset": saved.get("profile_asset"),
+            "username": saved.get("instagram_username") or "",
+            "caption": "",
+            "bg_color": saved.get("ig_bg_color", "#FFFFFF"),
+            "text_color": saved.get("ig_text_color", "#141414"),
+            "avatar_size": saved.get("ig_avatar_size", 72),
+            "username_size": saved.get("ig_username_size", 34),
+            "caption_size": saved.get("ig_caption_size", 28),
+        },
+    }
+
+
+_COMPOSE_FLAT_KEYS = (
+    "overlay_asset", "profile_asset", "instagram_username", "logo_asset",
+    "logo_x", "logo_y", "logo_scale", "progress_enabled", "progress_color",
+    "progress_height_pct", "headline_style", "headline_bg", "headline_color",
+    "headline_font_size", "headline_align", "headline_max_width_pct", "overlay_pos_x", "overlay_pos_y",
+    "video_pos_x", "video_pos_y", "ig_bg_color", "ig_text_color",
+    "ig_avatar_size", "ig_username_size", "ig_caption_size",
+)
+
+_IG_KEY_MAP = {
+    "profile_asset": "profile_asset",
+    "instagram_username": "username",
+    "ig_bg_color": "bg_color",
+    "ig_text_color": "text_color",
+    "ig_avatar_size": "avatar_size",
+    "ig_username_size": "username_size",
+    "ig_caption_size": "caption_size",
+}
+
+
+def _compose_extras_from_render(body: RenderRequest, job_dir: Path) -> ComposeExtras:
+    d = {
+        "headline_text": body.headline_text,
+        "headline_style": body.headline_style,
+        "headline_bg": body.headline_bg,
+        "headline_color": body.headline_color,
+        "headline_font_size": body.headline_font_size,
+        "headline_align": body.headline_align,
+        "headline_max_width_pct": body.headline_max_width_pct,
+        "overlay_pos_x": body.overlay_pos_x,
+        "overlay_pos_y": body.overlay_pos_y,
+        "logo_asset": body.logo_asset,
+        "logo_x": body.logo_x,
+        "logo_y": body.logo_y,
+        "logo_scale": body.logo_scale,
+        "progress_enabled": body.progress_enabled,
+        "progress_color": body.progress_color,
+        "progress_height_pct": body.progress_height_pct,
+        "instagram": {
+            "profile_asset": body.profile_asset,
+            "username": body.instagram_username or "",
+            "caption": body.instagram_caption or "",
+            "bg_color": body.ig_bg_color,
+            "text_color": body.ig_text_color,
+            "avatar_size": body.ig_avatar_size,
+            "username_size": body.ig_username_size,
+            "caption_size": body.ig_caption_size,
+        },
+    }
+    return ComposeExtras.from_dict(d, job_dir)
+
+
+def _resolve_template_id(aspect: str | None, template: str | None) -> str | None:
+    if template:
+        return template
+    if aspect == "vertical":
+        return "reels_full"
+    return None
 
 
 def _render_opts_from_request(body: ClipsRenderRequest | SingleClipRenderRequest, job_dir: Path) -> dict:
@@ -197,13 +404,36 @@ def _render_opts_from_request(body: ClipsRenderRequest | SingleClipRenderRequest
     hl = getattr(body, "highlight_enabled", None)
     if hl is None:
         hl = saved.get("highlight_enabled", False)
+    template = getattr(body, "template", None) or saved.get("template")
+    aspect = getattr(body, "aspect", None) or saved.get("aspect", "vertical")
+    if not template:
+        template = _resolve_template_id(aspect, None)
+    compose_base = _compose_dict_from_saved(saved)
+    for key in _COMPOSE_FLAT_KEYS:
+        val = getattr(body, key, None)
+        if val is not None:
+            if key in _IG_KEY_MAP:
+                compose_base["instagram"][_IG_KEY_MAP[key]] = val
+            else:
+                compose_base[key] = val
+        elif key in saved and key not in ("overlay_asset", "profile_asset", "instagram_username"):
+            compose_base[key] = saved[key]
+        elif key == "overlay_asset" and saved.get("overlay_asset"):
+            compose_base["overlay_asset"] = saved["overlay_asset"]
+        elif key == "profile_asset" and saved.get("profile_asset"):
+            compose_base["instagram"]["profile_asset"] = saved["profile_asset"]
+        elif key == "instagram_username" and saved.get("instagram_username"):
+            compose_base["instagram"]["username"] = saved["instagram_username"]
     return {
-        "aspect": getattr(body, "aspect", None) or saved.get("aspect", "vertical"),
+        "aspect": aspect,
+        "template": template,
         "preset": body.preset if body.preset is not None else saved.get("preset", "capcut_amarelo"),
         "custom_style": body.custom if body.custom is not None else saved.get("style"),
         "words_per_line": body.words_per_line or saved.get("words_per_line", 4),
         "resolution": body.resolution or saved.get("resolution", "1080p"),
         "highlight_enabled": bool(hl),
+        "overlay_asset": getattr(body, "overlay_asset", None) or saved.get("overlay_asset"),
+        "compose": compose_base,
     }
 
 
@@ -232,11 +462,14 @@ def _sync_render_one_clip(
         render_clip(
             job.job_dir(), job.video_path, words, clip,
             aspect=opts["aspect"],
+            template=opts.get("template"),
             preset=opts["preset"],
             custom_style=opts["custom_style"],
             words_per_line=opts["words_per_line"],
             resolution=opts["resolution"],
             highlight_enabled=opts.get("highlight_enabled", False),
+            overlay_asset=opts.get("overlay_asset"),
+            compose_opts=opts.get("compose"),
             on_progress=on_progress,
         )
         clip["status"] = "done"
@@ -675,6 +908,8 @@ async def _run_render(job: Job, body: RenderRequest) -> None:
             data["height"] = tpl.height
             if body.pos_y is None:
                 cfg.pos_y = float(tpl.subtitle_safe_y)
+            if body.pos_x is None and tpl.subtitle_safe_x is not None:
+                cfg.pos_x = float(tpl.subtitle_safe_x)
         else:
             from media import probe_video
             info = probe_video(job.video_path)
@@ -707,8 +942,8 @@ async def _run_render(job: Job, body: RenderRequest) -> None:
             job.update(Stage.RENDERING, p, msg)
 
         if tpl:
-            # Import here so Fase 1 stays runnable before compose.py exists.
             import compose
+            extras = _compose_extras_from_render(body, job.job_dir())
             def work() -> None:
                 compose.render_compose(
                     job.video_path, overlay_path, job.ass_path, job.output_path,
@@ -717,6 +952,8 @@ async def _run_render(job: Job, body: RenderRequest) -> None:
                     duration=job.duration, on_progress=on_progress,
                     video_pos=(body.video_pos_x, body.video_pos_y),
                     highlight_effects=effects_map if body.highlight_enabled else None,
+                    extras=extras,
+                    job_dir=job.job_dir(),
                 )
         else:
             def work() -> None:

@@ -9,9 +9,15 @@ import ClipBoundsEditor from "@/components/ClipBoundsEditor";
 import CortesStepBar, { type CortesStep } from "@/components/CortesStepBar";
 import ClipExportPanel from "@/components/ClipExportPanel";
 import ClipFormatPicker, {
-  CORTES_VERTICAL,
-  defaultPositionForAspect,
+  backendToFormat,
+  defaultPositionForTemplate,
+  formatToBackend,
+  isComposeFormat,
+  needsOverlay,
+  templateForFormat,
 } from "@/components/ClipFormatPicker";
+import ClipComposePanel from "@/components/ClipComposePanel";
+import TemplatePreview from "@/components/TemplatePreview";
 import StylePicker from "@/components/StylePicker";
 import TranscriptEditor from "@/components/TranscriptEditor";
 import HighlightPanel from "@/components/HighlightPanel";
@@ -21,6 +27,7 @@ import {
   getClips,
   getJob,
   getWords,
+  listTemplates,
   renderSingleClip,
   saveClipKeywords,
   saveClipWords,
@@ -31,13 +38,17 @@ import {
   startTranscribe,
   waitForClips,
   type ClipSegment,
+  type ComposeSettings,
+  type ExportFormatId,
   type JobState,
   type StyleConfig,
+  type TemplateInfo,
   type Word,
   type WordsData,
 } from "@/lib/api";
 import { groupHighlightPhrases } from "@/lib/highlightPhrases";
 import { useJobEvents } from "@/lib/useJobEvents";
+import { DEFAULT_COMPOSE } from "@/lib/composeDefaults";
 
 const DEFAULT_STYLE: StyleConfig = {
   font: "Roboto",
@@ -63,6 +74,8 @@ const DEFAULT_STYLE: StyleConfig = {
   word_spacing: 4,
   pause_threshold_s: 0.45,
 };
+
+const DEFAULT_COMPOSE_LOCAL: ComposeSettings = { ...DEFAULT_COMPOSE };
 
 function labelForStage(stage: string): string {
   const map: Record<string, string> = {
@@ -101,6 +114,10 @@ export default function CortesPage() {
   const [style, setStyle] = useState<StyleConfig>(DEFAULT_STYLE);
   const [wordsPerLine, setWordsPerLine] = useState(4);
   const [aspect, setAspect] = useState<"original" | "vertical">("vertical");
+  const [exportFormat, setExportFormat] = useState<ExportFormatId>("reels_full");
+  const [templates, setTemplates] = useState<TemplateInfo[]>([]);
+  const [compose, setCompose] = useState<ComposeSettings>(DEFAULT_COMPOSE_LOCAL);
+  const [videoPos, setVideoPos] = useState({ x: 0.5, y: 0.5 });
   const [position, setPosition] = useState<{ x: number | null; y: number | null }>({
     x: null,
     y: null,
@@ -132,6 +149,10 @@ export default function CortesPage() {
       setError(liveJob.message || "Falha ao processar.");
     }
   }, [liveJob]);
+
+  useEffect(() => {
+    listTemplates().then((r) => setTemplates(r.templates ?? [])).catch(() => {});
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -171,6 +192,39 @@ export default function CortesPage() {
         }
         if (clipsData?.words_per_line) setWordsPerLine(clipsData.words_per_line);
         if (clipsData?.aspect) setAspect(clipsData.aspect);
+        setExportFormat(backendToFormat(clipsData?.aspect, clipsData?.template));
+        setCompose({
+          ...DEFAULT_COMPOSE_LOCAL,
+          overlay_asset: clipsData?.overlay_asset ?? null,
+          profile_asset: clipsData?.profile_asset ?? null,
+          instagram_username: clipsData?.instagram_username ?? "",
+          logo_asset: clipsData?.logo_asset ?? null,
+          logo_x: clipsData?.logo_x ?? DEFAULT_COMPOSE_LOCAL.logo_x,
+          logo_y: clipsData?.logo_y ?? DEFAULT_COMPOSE_LOCAL.logo_y,
+          logo_scale: clipsData?.logo_scale ?? DEFAULT_COMPOSE_LOCAL.logo_scale,
+          progress_enabled: clipsData?.progress_enabled ?? false,
+          progress_color: clipsData?.progress_color ?? DEFAULT_COMPOSE_LOCAL.progress_color,
+          progress_height_pct: clipsData?.progress_height_pct ?? DEFAULT_COMPOSE_LOCAL.progress_height_pct,
+          headline_style: clipsData?.headline_style ?? "bold_red",
+          headline_bg: clipsData?.headline_bg ?? DEFAULT_COMPOSE_LOCAL.headline_bg,
+          headline_color: clipsData?.headline_color ?? DEFAULT_COMPOSE_LOCAL.headline_color,
+          headline_font_size: clipsData?.headline_font_size ?? DEFAULT_COMPOSE_LOCAL.headline_font_size,
+          headline_align: (clipsData?.headline_align as ComposeSettings["headline_align"]) ?? DEFAULT_COMPOSE_LOCAL.headline_align,
+          headline_max_width_pct: clipsData?.headline_max_width_pct ?? DEFAULT_COMPOSE_LOCAL.headline_max_width_pct,
+          overlay_pos_x: clipsData?.overlay_pos_x ?? DEFAULT_COMPOSE_LOCAL.overlay_pos_x,
+          overlay_pos_y: clipsData?.overlay_pos_y ?? DEFAULT_COMPOSE_LOCAL.overlay_pos_y,
+          video_pos_x: clipsData?.video_pos_x ?? DEFAULT_COMPOSE_LOCAL.video_pos_x,
+          video_pos_y: clipsData?.video_pos_y ?? DEFAULT_COMPOSE_LOCAL.video_pos_y,
+          ig_bg_color: clipsData?.ig_bg_color ?? DEFAULT_COMPOSE_LOCAL.ig_bg_color,
+          ig_text_color: clipsData?.ig_text_color ?? DEFAULT_COMPOSE_LOCAL.ig_text_color,
+          ig_avatar_size: clipsData?.ig_avatar_size ?? DEFAULT_COMPOSE_LOCAL.ig_avatar_size,
+          ig_username_size: clipsData?.ig_username_size ?? DEFAULT_COMPOSE_LOCAL.ig_username_size,
+          ig_caption_size: clipsData?.ig_caption_size ?? DEFAULT_COMPOSE_LOCAL.ig_caption_size,
+        });
+        setVideoPos({
+          x: clipsData?.video_pos_x ?? 0.5,
+          y: clipsData?.video_pos_y ?? 0.5,
+        });
         if (clipsData?.highlight_enabled != null) setHighlightEnabled(clipsData.highlight_enabled);
         if (clipsData?.clips?.length) {
           setClipList(clipsData.clips);
@@ -306,15 +360,31 @@ export default function CortesPage() {
     }));
   }, [step, highlightEnabled, previewClip, clipWords, clipKeywords]);
 
+  const activeTemplate = useMemo(() => {
+    const tid = templateForFormat(exportFormat);
+    if (!tid) return null;
+    return templates.find((t) => t.id === tid) ?? null;
+  }, [exportFormat, templates]);
+
   const previewSize = useMemo(() => {
-    if (step >= 2 && aspect === "vertical") {
-      return { width: CORTES_VERTICAL.width, height: CORTES_VERTICAL.height };
+    if (step >= 2 && activeTemplate) {
+      return { width: activeTemplate.width, height: activeTemplate.height };
+    }
+    if (step >= 2 && exportFormat === "reels_full") {
+      return { width: 1080, height: 1920 };
     }
     return {
       width: wordsData?.width ?? 1920,
       height: wordsData?.height ?? 1080,
     };
-  }, [step, aspect, wordsData]);
+  }, [step, exportFormat, activeTemplate, wordsData]);
+
+  const previewCompose = useMemo(() => ({
+    ...compose,
+    headline_text: previewClip?.headline ?? compose.headline_text,
+    instagram_caption: previewClip?.caption ?? compose.instagram_caption,
+    overlay_asset: compose.overlay_asset,
+  }), [compose, previewClip?.headline, previewClip?.caption]);
 
   /** Seek into clip / first highlight so preview shows destaque immediately. */
   useEffect(() => {
@@ -340,15 +410,18 @@ export default function CortesPage() {
   );
 
   const persistSettings = useCallback(
-    async (patch: {
-      style?: StyleConfig;
-      words_per_line?: number;
-      aspect?: "original" | "vertical";
-      highlight_enabled?: boolean;
-    }) => {
+    async (patch: Partial<{
+      style: StyleConfig;
+      words_per_line: number;
+      aspect: "original" | "vertical";
+      template: string | null;
+      highlight_enabled: boolean;
+    }> & Partial<ComposeSettings>) => {
       if (!settingsReady) return;
       try {
         const stylePayload = patch.style ?? style;
+        const fmt = exportFormat;
+        const { aspect: fmtAspect, template: fmtTemplate } = formatToBackend(fmt);
         await saveClipsSettings(jobId, {
           style: {
             ...stylePayload,
@@ -356,14 +429,40 @@ export default function CortesPage() {
             pos_y: stylePayload.pos_y ?? position.y,
           },
           words_per_line: patch.words_per_line ?? wordsPerLine,
-          aspect: patch.aspect ?? aspect,
+          aspect: patch.aspect ?? fmtAspect,
+          template: patch.template !== undefined ? patch.template : fmtTemplate,
           highlight_enabled: patch.highlight_enabled ?? highlightEnabled,
+          overlay_asset: patch.overlay_asset ?? compose.overlay_asset,
+          profile_asset: patch.profile_asset ?? compose.profile_asset,
+          instagram_username: patch.instagram_username ?? compose.instagram_username,
+          logo_asset: patch.logo_asset ?? compose.logo_asset,
+          logo_x: patch.logo_x ?? compose.logo_x,
+          logo_y: patch.logo_y ?? compose.logo_y,
+          logo_scale: patch.logo_scale ?? compose.logo_scale,
+          progress_enabled: patch.progress_enabled ?? compose.progress_enabled,
+          progress_color: patch.progress_color ?? compose.progress_color,
+          progress_height_pct: patch.progress_height_pct ?? compose.progress_height_pct,
+          headline_style: patch.headline_style ?? compose.headline_style,
+          headline_bg: patch.headline_bg ?? compose.headline_bg,
+          headline_color: patch.headline_color ?? compose.headline_color,
+          headline_font_size: patch.headline_font_size ?? compose.headline_font_size,
+          headline_align: patch.headline_align ?? compose.headline_align,
+          headline_max_width_pct: patch.headline_max_width_pct ?? compose.headline_max_width_pct,
+          overlay_pos_x: patch.overlay_pos_x ?? compose.overlay_pos_x,
+          overlay_pos_y: patch.overlay_pos_y ?? compose.overlay_pos_y,
+          video_pos_x: patch.video_pos_x ?? compose.video_pos_x ?? videoPos.x,
+          video_pos_y: patch.video_pos_y ?? compose.video_pos_y ?? videoPos.y,
+          ig_bg_color: patch.ig_bg_color ?? compose.ig_bg_color,
+          ig_text_color: patch.ig_text_color ?? compose.ig_text_color,
+          ig_avatar_size: patch.ig_avatar_size ?? compose.ig_avatar_size,
+          ig_username_size: patch.ig_username_size ?? compose.ig_username_size,
+          ig_caption_size: patch.ig_caption_size ?? compose.ig_caption_size,
         });
       } catch {
         /* ignore */
       }
     },
-    [jobId, style, wordsPerLine, aspect, position, highlightEnabled, settingsReady],
+    [jobId, style, wordsPerLine, exportFormat, position, highlightEnabled, compose, videoPos, settingsReady],
   );
 
   useEffect(() => {
@@ -372,21 +471,81 @@ export default function CortesPage() {
       persistSettings({});
     }, 800);
     return () => clearTimeout(t);
-  }, [style, wordsPerLine, aspect, position, highlightEnabled, settingsReady, persistSettings]);
+  }, [style, wordsPerLine, exportFormat, compose, position, videoPos, highlightEnabled, settingsReady, persistSettings]);
 
-  const handleAspectChange = useCallback(
-    (next: "original" | "vertical") => {
-      if (next === aspect) return;
-      setAspect(next);
+  const handleFormatChange = useCallback(
+    (fmt: ExportFormatId) => {
+      setExportFormat(fmt);
+      const { aspect: nextAspect, template: nextTemplate } = formatToBackend(fmt);
+      setAspect(nextAspect);
+      const tpl = nextTemplate ? templates.find((t) => t.id === nextTemplate) ?? null : null;
       const vw = wordsData?.width ?? 1920;
       const vh = wordsData?.height ?? 1080;
-      const pos = defaultPositionForAspect(next, vw, vh, style.margin_v ?? 120);
+      const pos = defaultPositionForTemplate(tpl, vw, vh, style.margin_v ?? 120);
       setPosition(pos);
       const nextStyle = { ...style, pos_x: pos.x, pos_y: pos.y };
       setStyle(nextStyle);
-      persistSettings({ aspect: next, style: nextStyle });
+      setVideoPos({ x: 0.5, y: 0.5 });
+      setCompose((c) => ({
+        ...c,
+        overlay_pos_x: 0.5,
+        overlay_pos_y: 0.5,
+        video_pos_x: 0.5,
+        video_pos_y: 0.5,
+      }));
+      persistSettings({
+        aspect: nextAspect,
+        template: nextTemplate,
+        style: nextStyle,
+        overlay_pos_x: 0.5,
+        overlay_pos_y: 0.5,
+        video_pos_x: 0.5,
+        video_pos_y: 0.5,
+      });
     },
-    [aspect, wordsData, style, persistSettings],
+    [wordsData, style, templates, persistSettings],
+  );
+
+  const handleComposeChange = useCallback(
+    (patch: Partial<ComposeSettings>) => {
+      setCompose((c) => ({ ...c, ...patch }));
+      void persistSettings(patch);
+    },
+    [persistSettings],
+  );
+
+  const handleVideoPosChange = useCallback(
+    (pos: { x: number; y: number }) => {
+      setVideoPos(pos);
+      handleComposeChange({ video_pos_x: pos.x, video_pos_y: pos.y });
+    },
+    [handleComposeChange],
+  );
+
+  const handleOverlayPosChange = useCallback(
+    (pos: { x: number; y: number }) => {
+      handleComposeChange({ overlay_pos_x: pos.x, overlay_pos_y: pos.y });
+    },
+    [handleComposeChange],
+  );
+
+  const validateComposeBeforeRender = useCallback((): string | null => {
+    if (!isComposeFormat(exportFormat)) return null;
+    if (needsOverlay(exportFormat) && !compose.overlay_asset) {
+      return "Este formato exige mídia de overlay — envie na aba Texto.";
+    }
+    return null;
+  }, [exportFormat, compose.overlay_asset]);
+
+  const handleClipTextChange = useCallback(
+    (text: string) => {
+      if (!activeClipId) return;
+      const field = "headline";
+      persistClips(
+        clipList.map((c) => (c.id === activeClipId ? { ...c, [field]: text } : c)),
+      );
+    },
+    [activeClipId, clipList, persistClips],
   );
 
   const handleDetect = async () => {
@@ -473,14 +632,43 @@ export default function CortesPage() {
     }
   };
 
-  const renderBody = () => ({
-    aspect,
-    preset: null as string | null,
-    custom: { ...style, pos_x: position.x, pos_y: position.y },
-    words_per_line: wordsPerLine,
-    resolution: "1080p" as const,
-    highlight_enabled: highlightEnabled,
-  });
+  const renderBody = () => {
+    const { aspect: a, template } = formatToBackend(exportFormat);
+    return {
+      aspect: a,
+      template,
+      preset: null as string | null,
+      custom: { ...style, pos_x: position.x, pos_y: position.y },
+      words_per_line: wordsPerLine,
+      resolution: "1080p" as const,
+      highlight_enabled: highlightEnabled,
+      overlay_asset: compose.overlay_asset,
+      profile_asset: compose.profile_asset,
+      instagram_username: compose.instagram_username,
+      logo_asset: compose.logo_asset,
+      logo_x: compose.logo_x,
+      logo_y: compose.logo_y,
+      logo_scale: compose.logo_scale,
+      progress_enabled: compose.progress_enabled,
+      progress_color: compose.progress_color,
+      progress_height_pct: compose.progress_height_pct,
+      headline_style: compose.headline_style,
+      headline_bg: compose.headline_bg,
+      headline_color: compose.headline_color,
+      headline_font_size: compose.headline_font_size,
+      headline_align: compose.headline_align,
+      headline_max_width_pct: compose.headline_max_width_pct,
+      overlay_pos_x: compose.overlay_pos_x,
+      overlay_pos_y: compose.overlay_pos_y,
+      video_pos_x: videoPos.x,
+      video_pos_y: videoPos.y,
+      ig_bg_color: compose.ig_bg_color,
+      ig_text_color: compose.ig_text_color,
+      ig_avatar_size: compose.ig_avatar_size,
+      ig_username_size: compose.ig_username_size,
+      ig_caption_size: compose.ig_caption_size,
+    };
+  };
 
   const pollClips = useCallback(() => {
     if (pollRef.current) clearInterval(pollRef.current);
@@ -503,6 +691,11 @@ export default function CortesPage() {
 
   const handleRenderOne = async (clipId: string) => {
     if (renderingIds.has(clipId)) return;
+    const composeErr = validateComposeBeforeRender();
+    if (composeErr) {
+      setError(composeErr);
+      return;
+    }
     setRenderingIds((prev) => new Set(prev).add(clipId));
     setClipList((prev) =>
       prev.map((c) => (c.id === clipId ? { ...c, status: "rendering" as const } : c)),
@@ -531,6 +724,11 @@ export default function CortesPage() {
     const ids = clipList.filter((c) => c.enabled).map((c) => c.id);
     if (!ids.length) {
       setError("Selecione ao menos um corte.");
+      return;
+    }
+    const composeErr = validateComposeBeforeRender();
+    if (composeErr) {
+      setError(composeErr);
       return;
     }
     setRenderingAll(true);
@@ -629,7 +827,31 @@ export default function CortesPage() {
                 : "Destaques ligados — aba Destaques → Detectar com IA"}
             </p>
           )}
-          {wordsData && (
+          {wordsData && step >= 2 && activeTemplate && isComposeFormat(exportFormat) ? (
+            <TemplatePreview
+              jobId={jobId}
+              template={activeTemplate}
+              overlayAsset={compose.overlay_asset ?? null}
+              words={previewWords}
+              style={{ ...style, pos_x: position.x, pos_y: position.y }}
+              wordsPerLine={wordsPerLine}
+              currentTime={currentTime}
+              duration={previewClip?.duration_s ?? job?.duration}
+              progressTime={
+                previewClip
+                  ? Math.max(0, Math.min(previewClip.duration_s, currentTime - previewClip.start_s))
+                  : undefined
+              }
+              highlightEnabled={highlightEnabled}
+              highlightPhrases={highlightPhrases}
+              compose={previewCompose}
+              videoPos={videoPos}
+              onVideoPosChange={handleVideoPosChange}
+              onOverlayPosChange={handleOverlayPosChange}
+              onLogoPosChange={(p) => handleComposeChange({ logo_x: p.x, logo_y: p.y })}
+              registerControls={(c) => (videoControlsRef.current = c)}
+            />
+          ) : wordsData ? (
             <VideoPreview
               jobId={jobId}
               width={previewSize.width}
@@ -652,12 +874,12 @@ export default function CortesPage() {
                   ? { start: previewClip.start_s, end: previewClip.end_s }
                   : null
               }
-              videoObjectFit={step >= 2 && aspect === "vertical" ? "cover" : "contain"}
+              videoObjectFit={step >= 2 && exportFormat !== "original" ? "cover" : "contain"}
             />
-          )}
+          ) : null}
           {step >= 2 && (
             <p className="mt-1 shrink-0 text-center text-[10px] text-zinc-500">
-              Preview em {aspect === "vertical" ? "9:16 vertical" : "formato original"} — arraste a legenda
+              Preview — arraste a legenda{activeTemplate ? " · formato composto" : ""}
             </p>
           )}
         </div>
@@ -720,11 +942,25 @@ export default function CortesPage() {
 
                   <div className="border-b border-border bg-panel/40">
                     <ClipFormatPicker
-                      aspect={aspect}
-                      onChange={handleAspectChange}
+                      format={exportFormat}
+                      onChange={handleFormatChange}
                       compact
                     />
                   </div>
+
+                  {isComposeFormat(exportFormat) && (
+                    <div className="border-b border-border">
+                      <ClipComposePanel
+                        jobId={jobId}
+                        format={exportFormat}
+                        compose={compose}
+                        onComposeChange={handleComposeChange}
+                        clipText={previewClip?.headline ?? ""}
+                        onClipTextChange={handleClipTextChange}
+                        clipTextLabel="Headline do corte"
+                      />
+                    </div>
+                  )}
 
                   <div className="flex border-b border-border">
                     {(
@@ -836,7 +1072,7 @@ export default function CortesPage() {
                       <ClipExportPanel
                         jobId={jobId}
                         clips={clipList}
-                        aspect={aspect}
+                        format={exportFormat}
                         onRenderOne={handleRenderOne}
                         onRenderAll={handleRenderAll}
                         renderingAll={renderingAll}

@@ -9,6 +9,7 @@ backend/*.egg-info/
 # Build / cache
 frontend/.next/
 frontend/out/
+frontend/tsconfig.tsbuildinfo
 *.log
 
 # Secrets & runtime data (never commit)

@@ -1,13 +1,14 @@
 "use client";
 
 import { Download, Loader2, Pencil } from "lucide-react";
-import type { ClipSegment } from "@/lib/api";
+import type { ClipSegment, ExportFormatId } from "@/lib/api";
 import { clipOutputUrl } from "@/lib/api";
+import { FORMAT_OPTIONS } from "@/components/ClipFormatPicker";
 
 type Props = {
   jobId: string;
   clips: ClipSegment[];
-  aspect: "original" | "vertical";
+  format: ExportFormatId;
   onRenderOne: (clipId: string) => void;
   onRenderAll: () => void;
   renderingAll: boolean;
@@ -24,7 +25,7 @@ function fmtDuration(s: number): string {
 export default function ClipExportPanel({
   jobId,
   clips,
-  aspect,
+  format,
   onRenderOne,
   onRenderAll,
   renderingAll,
@@ -32,7 +33,7 @@ export default function ClipExportPanel({
   onEditFormat,
 }: Props) {
   const enabled = clips.filter((c) => c.enabled);
-  const formatLabel = aspect === "vertical" ? "9:16 Vertical" : "Original";
+  const formatLabel = FORMAT_OPTIONS.find((f) => f.id === format)?.label ?? format;
 
   return (
     <div className="space-y-4 p-4">

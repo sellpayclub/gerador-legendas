@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { ArrowLeft, LayoutTemplate, Loader2, Sparkles, Type, ScrollText, Wand2, Zap } from "lucide-react";
 import VideoPreview from "@/components/VideoPreview";
@@ -23,10 +23,12 @@ import {
   type ResolutionInfo,
   type StyleConfig,
   type TemplateInfo,
+  type ComposeSettings,
   type Word,
   type WordsData,
 } from "@/lib/api";
 import { useJobEvents } from "@/lib/useJobEvents";
+import { DEFAULT_COMPOSE } from "@/lib/composeDefaults";
 
 const DEFAULT_STYLE: StyleConfig = {
   font: "Roboto",
@@ -53,6 +55,8 @@ const DEFAULT_STYLE: StyleConfig = {
   pause_threshold_s: 0.45,
 };
 
+const DEFAULT_COMPOSE_LOCAL: ComposeSettings = { ...DEFAULT_COMPOSE };
+
 type Tab = "style" | "transcript" | "template" | "highlight";
 
 export default function EditorPage() {
@@ -75,6 +79,7 @@ export default function EditorPage() {
   const [selectedTemplate, setSelectedTemplate] = useState<string | null>(null);
   const [resolution, setResolution] = useState<"480p" | "720p" | "1080p">("1080p");
   const [overlayAsset, setOverlayAsset] = useState<string | null>(null);
+  const [compose, setCompose] = useState<ComposeSettings>(DEFAULT_COMPOSE_LOCAL);
   const [keywords, setKeywords] = useState<number[]>([]);
   const [highlightEnabled, setHighlightEnabled] = useState(false);
   const [videoPos, setVideoPos] = useState<{ x: number; y: number }>({ x: 0.5, y: 0.5 });
@@ -240,6 +245,21 @@ export default function EditorPage() {
     await saveWords(jobId, words);
   };
 
+  const handleTemplateChange = useCallback((id: string | null) => {
+    setSelectedTemplate(id);
+    if (!id) {
+      setOverlayAsset(null);
+      return;
+    }
+    setVideoPos({ x: 0.5, y: 0.5 });
+    setCompose((c) => ({
+      ...c,
+      overlay_pos_x: 0.5,
+      overlay_pos_y: 0.5,
+      ...(id.startsWith("choquei_") ? {} : { headline_text: null }),
+    }));
+  }, []);
+
   const handleRender = async () => {
     if (!wordsData) return;
     if (selectedTemplate) {
@@ -275,6 +295,30 @@ export default function EditorPage() {
         overlay_asset: selectedTemplate ? overlayAsset : null,
         video_pos_x: selectedTemplate ? videoPos.x : null,
         video_pos_y: selectedTemplate ? videoPos.y : null,
+        headline_text: compose.headline_text,
+        headline_style: compose.headline_style,
+        headline_bg: compose.headline_bg,
+        headline_color: compose.headline_color,
+        headline_font_size: compose.headline_font_size,
+        headline_align: compose.headline_align,
+        headline_max_width_pct: compose.headline_max_width_pct,
+        instagram_username: compose.instagram_username,
+        instagram_caption: compose.instagram_caption,
+        profile_asset: compose.profile_asset,
+        logo_asset: compose.logo_asset,
+        logo_x: compose.logo_x,
+        logo_y: compose.logo_y,
+        logo_scale: compose.logo_scale,
+        progress_enabled: compose.progress_enabled,
+        progress_color: compose.progress_color,
+        progress_height_pct: compose.progress_height_pct,
+        overlay_pos_x: compose.overlay_pos_x,
+        overlay_pos_y: compose.overlay_pos_y,
+        ig_bg_color: compose.ig_bg_color,
+        ig_text_color: compose.ig_text_color,
+        ig_avatar_size: compose.ig_avatar_size,
+        ig_username_size: compose.ig_username_size,
+        ig_caption_size: compose.ig_caption_size,
       });
       router.push(`/render/${jobId}`);
     } catch {
@@ -342,10 +386,14 @@ export default function EditorPage() {
                 style={style}
                 wordsPerLine={wordsPerLine}
                 currentTime={currentTime}
+                duration={job?.duration}
                 highlightEnabled={highlightEnabled}
                 highlightPhrases={highlightPhrases}
                 videoPos={videoPos}
                 onVideoPosChange={setVideoPos}
+                compose={compose}
+                onLogoPosChange={(p) => setCompose((c) => ({ ...c, logo_x: p.x, logo_y: p.y }))}
+                onOverlayPosChange={(p) => setCompose((c) => ({ ...c, overlay_pos_x: p.x, overlay_pos_y: p.y }))}
                 registerControls={(c) => (videoControlsRef.current = c)}
               />
             ) : job && (
@@ -391,11 +439,13 @@ export default function EditorPage() {
                 templates={templates}
                 resolutions={resolutions}
                 selectedTemplate={selectedTemplate}
-                onTemplateChange={setSelectedTemplate}
+                onTemplateChange={handleTemplateChange}
                 resolution={resolution}
                 onResolutionChange={setResolution}
                 overlayAsset={overlayAsset}
                 onOverlayAssetChange={setOverlayAsset}
+                compose={compose}
+                onComposeChange={(patch) => setCompose((c) => ({ ...c, ...patch }))}
               />
             ) : tab === "highlight" ? (
               <HighlightPanel

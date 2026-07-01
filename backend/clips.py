@@ -411,13 +411,31 @@ def update_clips(job_dir: Path, clips: list[dict], *, manual: bool = True) -> di
 
 def _merge_settings(prev: dict) -> dict:
     """Preserve style/settings fields when updating clips list."""
-    keys = ("style", "preset", "words_per_line", "aspect", "resolution", "highlight_enabled")
+    keys = (
+        "style", "preset", "words_per_line", "aspect", "template", "resolution",
+        "highlight_enabled", "overlay_asset", "profile_asset", "instagram_username",
+        "logo_asset", "logo_x", "logo_y", "logo_scale", "progress_enabled",
+        "progress_color", "progress_height_pct", "headline_style", "headline_bg",
+        "headline_color", "headline_font_size", "headline_align", "headline_max_width_pct",
+        "overlay_pos_x",
+        "overlay_pos_y", "video_pos_x", "video_pos_y", "ig_bg_color", "ig_text_color",
+        "ig_avatar_size", "ig_username_size", "ig_caption_size",
+    )
     return {k: prev[k] for k in keys if k in prev}
 
 
 def update_settings(job_dir: Path, settings: dict) -> dict:
     prev = load_clips(job_dir) or {"clips": []}
-    allowed = ("style", "preset", "words_per_line", "aspect", "resolution", "highlight_enabled")
+    allowed = (
+        "style", "preset", "words_per_line", "aspect", "template", "resolution",
+        "highlight_enabled", "overlay_asset", "profile_asset", "instagram_username",
+        "logo_asset", "logo_x", "logo_y", "logo_scale", "progress_enabled",
+        "progress_color", "progress_height_pct", "headline_style", "headline_bg",
+        "headline_color", "headline_font_size", "headline_align", "headline_max_width_pct",
+        "overlay_pos_x",
+        "overlay_pos_y", "video_pos_x", "video_pos_y", "ig_bg_color", "ig_text_color",
+        "ig_avatar_size", "ig_username_size", "ig_caption_size",
+    )
     for k in allowed:
         if k in settings:
             prev[k] = settings[k]

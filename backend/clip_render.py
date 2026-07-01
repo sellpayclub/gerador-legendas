@@ -9,10 +9,11 @@ from typing import Callable, Optional
 import keywords
 from ass_gen import generate_ass
 from clips import clip_dir, clip_output_path, load_clip_keywords, words_for_render
-from media import ffmpeg_bin, parse_progress
+from media import ffmpeg_bin
+from overlays import ComposeExtras, InstagramHeader
 from presets import StyleConfig, apply_preset
 from render import render_video
-from templates import get_template
+from templates import TemplateDef, get_template
 
 
 def cut_video_segment(
@@ -42,6 +43,26 @@ def cut_video_segment(
         raise RuntimeError(f"ffmpeg cut failed: {proc.stderr[-600:]}")
 
 
+def _resolve_template(template: str | None, aspect: str) -> TemplateDef | None:
+    if template == "noticia_choquei":
+        template = "reels_full"
+    if template:
+        return get_template(template)
+    if aspect == "vertical":
+        return get_template("reels_full")
+    return None
+
+
+def _video_pos_from_opts(compose_opts: dict | None) -> tuple[float, float]:
+    opts = compose_opts or {}
+    vpx = opts.get("video_pos_x")
+    vpy = opts.get("video_pos_y")
+    return (
+        0.5 if vpx is None else max(0.0, min(1.0, float(vpx))),
+        0.5 if vpy is None else max(0.0, min(1.0, float(vpy))),
+    )
+
+
 def render_clip(
     job_dir: Path,
     video_path: Path,
@@ -49,11 +70,14 @@ def render_clip(
     clip: dict,
     *,
     aspect: str = "original",
+    template: str | None = None,
     preset: str | None = "capcut_amarelo",
     custom_style: dict | None = None,
     words_per_line: int = 4,
     resolution: str = "1080p",
     highlight_enabled: bool = False,
+    overlay_asset: str | None = None,
+    compose_opts: dict | None = None,
     on_progress: Optional[Callable[[float, str], None]] = None,
 ) -> Path:
     """Cut segment, generate ASS, burn subtitles → clips/{id}/output.mp4."""
@@ -81,14 +105,14 @@ def render_clip(
         if indices:
             highlight_phrases = keywords.group_highlight_phrases(sliced, indices)
 
-    data = json.loads((job_dir / "words.json").read_text(encoding="utf-8"))
-    tpl = get_template("reels_full") if aspect == "vertical" else None
+    tpl = _resolve_template(template, aspect)
 
+    data = json.loads((job_dir / "words.json").read_text(encoding="utf-8"))
     if tpl:
         data["width"] = tpl.width
         data["height"] = tpl.height
         if cfg.pos_x is None:
-            cfg.pos_x = float(tpl.width / 2)
+            cfg.pos_x = float(tpl.subtitle_safe_x if tpl.subtitle_safe_x else tpl.width / 2)
         if cfg.pos_y is None:
             cfg.pos_y = float(tpl.subtitle_safe_y)
     else:
@@ -118,12 +142,30 @@ def render_clip(
 
     if tpl:
         import compose
+        overlay_path: Path | None = None
+        if overlay_asset:
+            candidate = job_dir / "assets" / Path(overlay_asset).name
+            if candidate.exists():
+                overlay_path = candidate
+        elif tpl.needs_overlay:
+            raise RuntimeError("Este template exige mídia de overlay.")
+
+        extras = ComposeExtras.from_dict(compose_opts or {}, job_dir)
+        if clip.get("headline"):
+            extras.headline_text = str(clip["headline"])
+        if clip.get("caption"):
+            if extras.instagram is None:
+                extras.instagram = InstagramHeader()
+            extras.instagram.caption = str(clip["caption"])
+
         compose.render_compose(
-            raw_path, None, ass_path, out_path,
+            raw_path, overlay_path, ass_path, out_path,
             tpl, phrases_arg, resolution,
             duration=duration,
             on_progress=lambda p, m: on_progress and on_progress(0.25 + p * 0.75, m),
-            video_pos=(0.5, 0.5),
+            video_pos=_video_pos_from_opts(compose_opts),
+            extras=extras,
+            job_dir=job_dir,
         )
     else:
         render_video(

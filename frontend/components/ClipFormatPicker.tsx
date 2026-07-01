@@ -1,20 +1,46 @@
 "use client";
 
-/** Matches backend templates.reels_full — vertical 9:16 export for cortes. */
+import type { ExportFormatId, TemplateInfo } from "@/lib/api";
 export const CORTES_VERTICAL = {
   width: 1080,
   height: 1920,
   subtitleSafeY: 1820,
 } as const;
 
-type Props = {
+export const FORMAT_OPTIONS: { id: ExportFormatId; label: string; desc: string }[] = [
+  { id: "original", label: "Original", desc: "Proporção do vídeo de entrada" },
+  { id: "reels_full", label: "9:16 Tela cheia", desc: "Vertical com crop central" },
+  { id: "choquei_image", label: "Choquei (imagem)", desc: "Imagem em cima, 70% vídeo embaixo" },
+  { id: "choquei_video", label: "Choquei (vídeo)", desc: "Vídeo loop em cima, 70% embaixo" },
+];
+
+export function formatToBackend(fmt: ExportFormatId): {
   aspect: "original" | "vertical";
-  onChange: (a: "original" | "vertical") => void;
+  template: string | null;
+} {
+  if (fmt === "original") return { aspect: "original", template: null };
+  return { aspect: "vertical", template: fmt };
+}
+
+export function backendToFormat(
+  aspect?: string,
+  template?: string | null,
+): ExportFormatId {
+  if (template === "choquei_image") return "choquei_image";
+  if (template === "choquei_video") return "choquei_video";
+  if (template === "noticia_choquei") return "reels_full";
+  if (template === "reels_full" || aspect === "vertical") return "reels_full";
+  return "original";
+}
+
+type Props = {
+  format: ExportFormatId;
+  onChange: (f: ExportFormatId) => void;
   disabled?: boolean;
   compact?: boolean;
 };
 
-export default function ClipFormatPicker({ aspect, onChange, disabled, compact }: Props) {
+export default function ClipFormatPicker({ format, onChange, disabled, compact }: Props) {
   return (
     <div className={compact ? "px-4 py-3" : "rounded-lg border border-border bg-panel/50 p-3"}>
       <p className="mb-2 text-xs font-medium text-zinc-300">
@@ -25,38 +51,44 @@ export default function ClipFormatPicker({ aspect, onChange, disabled, compact }
           </span>
         )}
       </p>
-      <div className="flex gap-2">
-        <button
-          type="button"
-          disabled={disabled}
-          onClick={() => onChange("vertical")}
-          className={`flex flex-1 flex-col items-center gap-1 rounded-lg border px-2 py-2.5 text-xs font-medium transition disabled:opacity-50 ${
-            aspect === "vertical"
-              ? "border-accent bg-accent/10 text-accent"
-              : "border-border text-zinc-400 hover:text-zinc-200"
-          }`}
-        >
-          <span className="inline-block h-5 w-3 rounded-sm border-2 border-current" />
-          9:16 Vertical
-        </button>
-        <button
-          type="button"
-          disabled={disabled}
-          onClick={() => onChange("original")}
-          className={`flex flex-1 flex-col items-center gap-1 rounded-lg border px-2 py-2.5 text-xs font-medium transition disabled:opacity-50 ${
-            aspect === "original"
-              ? "border-accent bg-accent/10 text-accent"
-              : "border-border text-zinc-400 hover:text-zinc-200"
-          }`}
-        >
-          <span className="inline-block h-3 w-5 rounded-sm border-2 border-current" />
-          Original
-        </button>
+      <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
+        {FORMAT_OPTIONS.map((opt) => (
+          <button
+            key={opt.id}
+            type="button"
+            disabled={disabled}
+            onClick={() => onChange(opt.id)}
+            className={`rounded-lg border px-2.5 py-2 text-left text-xs transition disabled:opacity-50 ${
+              format === opt.id
+                ? "border-accent bg-accent/10 text-accent"
+                : "border-border text-zinc-400 hover:text-zinc-200"
+            }`}
+          >
+            <span className="block font-medium">{opt.label}</span>
+            <span className="mt-0.5 block text-[10px] opacity-70">{opt.desc}</span>
+          </button>
+        ))}
       </div>
     </div>
   );
 }
 
+export function defaultPositionForTemplate(
+  tpl: TemplateInfo | null,
+  videoWidth: number,
+  videoHeight: number,
+  marginV: number,
+): { x: number; y: number } {
+  if (tpl) {
+    return {
+      x: tpl.subtitle_safe_x ?? tpl.width / 2,
+      y: tpl.subtitle_safe_y,
+    };
+  }
+  return { x: videoWidth / 2, y: videoHeight - marginV };
+}
+
+/** @deprecated use defaultPositionForTemplate */
 export function defaultPositionForAspect(
   aspect: "original" | "vertical",
   videoWidth: number,
@@ -67,4 +99,22 @@ export function defaultPositionForAspect(
     return { x: CORTES_VERTICAL.width / 2, y: CORTES_VERTICAL.subtitleSafeY };
   }
   return { x: videoWidth / 2, y: videoHeight - marginV };
+}
+
+export function templateForFormat(fmt: ExportFormatId): string | null {
+  return formatToBackend(fmt).template;
+}
+
+export function isComposeFormat(fmt: ExportFormatId): boolean {
+  return fmt !== "original";
+}
+
+export function needsOverlay(fmt: ExportFormatId): boolean {
+  return fmt === "choquei_image" || fmt === "choquei_video";
+}
+
+export function overlayAccepts(fmt: ExportFormatId): ("image" | "video")[] {
+  if (fmt === "choquei_image") return ["image"];
+  if (fmt === "choquei_video") return ["video"];
+  return ["image", "video"];
 }
