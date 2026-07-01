@@ -1,9 +1,21 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Play, Pause, SkipBack, SkipForward } from "lucide-react";
 import type { StyleConfig, Word } from "@/lib/api";
-import { subtitleTextStyle, fontFamilyCss } from "@/lib/subtitleLayout";
+import KaraokeLine, { heroOutlineStyle } from "@/components/KaraokeLine";
+import {
+  findActiveGroup,
+  fontFamilyCss,
+  isWordActive,
+} from "@/lib/subtitleLayout";
+import { activePhrase, inHighlightEffectWindow, type HighlightPhrase } from "@/lib/highlightPhrases";
+import { fitHeroPhrase, heroCssFontSize } from "@/lib/heroLayout";
+import {
+  DEFAULT_PAUSE_THRESHOLD_S,
+  groupWordsByPause,
+  trimWordEnds,
+} from "@/lib/timing";
 
 /** Shown on the preview while transcription is pending or returned empty. */
 const PLACEHOLDER_WORDS: Word[] = [
@@ -24,6 +36,13 @@ type Props = {
   registerControls?: (controls: { seek: (t: number) => void; getCurrentTime: () => number }) => void;
   /** Limit video height to fit viewport (editor split layout). */
   compact?: boolean;
+  /** Override max-height in compact mode (e.g. when parent constrains height). */
+  compactMaxHeight?: string;
+  /** Dramatic highlight: big centered phrase + blur (only when enabled). */
+  highlightEnabled?: boolean;
+  highlightPhrases?: HighlightPhrase[];
+  /** Active clip range for Cortes mode — highlights scrubber region. */
+  activeClip?: { start: number; end: number } | null;
 };
 
 /**
@@ -47,6 +66,10 @@ export default function VideoPreview({
   registerControls,
   isPlaceholder = false,
   compact = false,
+  compactMaxHeight,
+  highlightEnabled = false,
+  highlightPhrases = [],
+  activeClip = null,
 }: Props & { isPlaceholder?: boolean }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const overlayRef = useRef<HTMLDivElement>(null);
@@ -56,7 +79,21 @@ export default function VideoPreview({
   const [playing, setPlaying] = useState(false);
   const dragState = useRef<{ startX: number; startY: number; baseX: number; baseY: number } | null>(null);
 
-  const displayWords = words.length > 0 ? words : PLACEHOLDER_WORDS;
+  const displayWords = useMemo(
+    () => (words.length > 0 ? trimWordEnds(words) : PLACEHOLDER_WORDS),
+    [words],
+  );
+  const pauseThreshold = style.pause_threshold_s ?? DEFAULT_PAUSE_THRESHOLD_S;
+
+  const groups = useMemo(
+    () => groupWordsByPause(displayWords, wordsPerLine, pauseThreshold),
+    [displayWords, wordsPerLine, pauseThreshold],
+  );
+
+  const { group: activeGroup, activeIdx: previewActiveIdx } = useMemo(
+    () => findActiveGroup(groups, displayWords, currentTime, { staticPreview: true }),
+    [groups, displayWords, currentTime],
+  );
 
   const scaleX = videoRect ? videoRect.w / width : 1;
   const scaleY = videoRect ? videoRect.h / height : 1;
@@ -118,45 +155,6 @@ export default function VideoPreview({
     });
   }, [registerControls]);
 
-  // Build word groups (same logic as backend)
-  const groups: Word[][] = [];
-  for (let i = 0; i < displayWords.length; i += wordsPerLine) {
-    groups.push(displayWords.slice(i, i + wordsPerLine));
-  }
-
-  // Active word at current time
-  const activeIdx = displayWords.findIndex(
-    (w) => currentTime >= w.start - 0.01 && currentTime < w.end
-  );
-
-  // Choose group to display:
-  // - If playing and an active word exists, show the group containing it
-  // - Otherwise show the group whose time range contains currentTime
-  // - Otherwise show the first group as a static preview
-  let activeGroup: Word[] | null = null;
-  let previewActiveIdx = -1;
-  if (activeIdx >= 0) {
-    for (const g of groups) {
-      if (displayWords.indexOf(g[0]) <= activeIdx && activeIdx < displayWords.indexOf(g[0]) + g.length) {
-        activeGroup = g;
-        previewActiveIdx = activeIdx;
-        break;
-      }
-    }
-  }
-  if (!activeGroup) {
-    for (const g of groups) {
-      if (g[0].start <= currentTime + 0.05 && g[g.length - 1].end >= currentTime - 0.5) {
-        activeGroup = g;
-      }
-    }
-  }
-  if (!activeGroup && groups.length > 0) {
-    // Static preview: first group, first word highlighted so user sees the highlight color
-    activeGroup = groups[0];
-    previewActiveIdx = displayWords.indexOf(groups[0][0]);
-  }
-
   // Drag handling
   const onPointerDown = useCallback(
     (e: React.PointerEvent) => {
@@ -198,26 +196,29 @@ export default function VideoPreview({
 
   const renderGroup = () => {
     if (!activeGroup) return null;
-    return activeGroup.map((w, i) => {
-      const wordGlobalIdx = displayWords.indexOf(w);
-      const isActive = wordGlobalIdx === previewActiveIdx;
-      const color = isActive ? style.primary_color : style.secondary_color;
-      const label = (w.w || "").trim();
-      if (!label) return null;
-      return (
-        <span
-          key={i}
-          style={subtitleTextStyle(style, scaleY, {
-            color,
-            isActive,
-            isLastInGroup: i === activeGroup!.length - 1,
-          })}
-        >
-          {label}
-        </span>
-      );
-    });
+    if (showHero) return null;
+    const groupActiveIdx = activeGroup.findIndex(
+      (w) => isWordActive(w, currentTime) || displayWords.indexOf(w) === previewActiveIdx,
+    );
+    return (
+      <KaraokeLine
+        words={activeGroup}
+        style={style}
+        scaleY={scaleY}
+        activeIndex={groupActiveIdx}
+      />
+    );
   };
+
+  const hero = highlightEnabled ? activePhrase(highlightPhrases, currentTime) : null;
+  const highlightBlur =
+    highlightEnabled && inHighlightEffectWindow(highlightPhrases, currentTime);
+  const heroLayout = hero ? fitHeroPhrase(hero.text, width, height) : null;
+  const heroCssFs =
+    hero && heroLayout && videoRect
+      ? heroCssFontSize(heroLayout.text, heroLayout.fontSize, videoRect.w, videoRect.h, width, height)
+      : 0;
+  const showHero = Boolean(hero && heroLayout && videoRect && heroCssFs > 0);
 
   // Custom controls
   const togglePlay = () => {
@@ -239,7 +240,7 @@ export default function VideoPreview({
   const videoFrameStyle: React.CSSProperties = compact
     ? {
         aspectRatio: `${width} / ${height}`,
-        maxHeight: "min(calc(100dvh - 11rem), 100%)",
+        maxHeight: compactMaxHeight ?? "min(calc(100dvh - 11rem), 100%)",
         width: isPortrait ? "auto" : "100%",
         maxWidth: "100%",
       }
@@ -254,12 +255,43 @@ export default function VideoPreview({
         <video
           ref={videoRef}
           src={`/api/jobs/${jobId}/video`}
-          className="h-full w-full object-contain"
+          className="h-full w-full object-contain transition-[filter] duration-200"
+          style={{
+            filter: highlightBlur ? "blur(16px) brightness(0.72) saturate(0.75)" : "none",
+          }}
           playsInline
           onClick={togglePlay}
         />
 
-        {videoRect && activeGroup && (
+        {/* Hero phrase — big, centered */}
+        {showHero && heroLayout && videoRect && (
+          <div
+            className="pointer-events-none absolute inset-0 flex items-center justify-center"
+            style={{ zIndex: 20, padding: "0 8%" }}
+          >
+            <p
+              style={{
+                fontFamily: fontFamilyCss(style.font),
+                fontSize: heroCssFs,
+                color: style.primary_color,
+                fontWeight: 800,
+                textAlign: "center",
+                lineHeight: 1.1,
+                width: "100%",
+                maxWidth: `${videoRect.w * 0.84}px`,
+                margin: 0,
+                whiteSpace: "nowrap",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                ...heroOutlineStyle(style, scaleY),
+              }}
+            >
+              {heroLayout.text}
+            </p>
+          </div>
+        )}
+
+        {videoRect && activeGroup && !showHero && (
           <div
             ref={overlayRef}
             onPointerDown={onPointerDown}
@@ -298,7 +330,7 @@ export default function VideoPreview({
       </div>
 
       {/* Custom controls */}
-      <div className={`flex shrink-0 items-center gap-2 rounded-lg border border-border bg-panel px-3 py-2 ${compact ? "w-full max-w-md" : "w-full"}`}>
+      <div className={`relative flex shrink-0 items-center gap-2 rounded-lg border border-border bg-panel px-3 py-2 ${compact ? "w-full max-w-md" : "w-full"}`}>
         <button onClick={() => seekRel(-5)} className="text-zinc-400 hover:text-zinc-100" title="-5s">
           <SkipBack className="h-4 w-4" />
         </button>
@@ -315,8 +347,22 @@ export default function VideoPreview({
           step={0.05}
           value={Math.min(currentTime, duration || 0)}
           onChange={onSeek}
-          className="flex-1"
+          className="relative z-10 flex-1"
         />
+        {activeClip && duration > 0 && (
+          <div
+            className="pointer-events-none absolute left-[calc(2.5rem+0.5rem)] right-16 top-1/2 h-1.5 -translate-y-1/2 rounded-full bg-zinc-700/80"
+            aria-hidden
+          >
+            <div
+              className="absolute h-full rounded-full bg-accent/40"
+              style={{
+                left: `${(activeClip.start / duration) * 100}%`,
+                width: `${((activeClip.end - activeClip.start) / duration) * 100}%`,
+              }}
+            />
+          </div>
+        )}
         <span className="text-xs tabular-nums text-zinc-500">
           {fmtTime(currentTime)} / {fmtTime(duration)}
         </span>

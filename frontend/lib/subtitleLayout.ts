@@ -1,18 +1,24 @@
 import type { CSSProperties } from "react";
 import type { StyleConfig, Word } from "@/lib/api";
+import { formatWordLabel, type TextCase } from "@/lib/textFormat";
+import {
+  KARAOKE_LEAD_S,
+  groupWordsByPause,
+  lineVisibilityWindow,
+} from "@/lib/timing";
 
-/** Same grouping logic as backend ass_gen._group_words */
+export { KARAOKE_LEAD_S, groupWordsByPause, lineVisibilityWindow };
+
+export function isWordActive(w: Word, currentTime: number): boolean {
+  return currentTime >= w.start - KARAOKE_LEAD_S && currentTime < w.end;
+}
+/** @deprecated Use groupWordsByPause — kept for callers passing fixed chunk size only. */
 export function groupWords(words: Word[], wordsPerLine: number): Word[][] {
-  const groups: Word[][] = [];
-  const n = Math.max(1, wordsPerLine);
-  for (let i = 0; i < words.length; i += n) {
-    groups.push(words.slice(i, i + n));
-  }
-  return groups;
+  return groupWordsByPause(words, wordsPerLine);
 }
 
-export function wordLabel(w: Word): string {
-  return (w.w || "").trim();
+export function wordLabel(w: Word, textCase?: TextCase): string {
+  return formatWordLabel(w.w || "", textCase);
 }
 
 /** Scale PlayRes units to CSS pixels on the preview video element. */
@@ -20,34 +26,41 @@ export function playResToCss(value: number, scaleY: number): number {
   return value * scaleY;
 }
 
-/** Map preset font names to loaded webfont CSS variables. */
+/** Map bundled font names to loaded webfont CSS variables. */
 export function fontFamilyCss(font: string): string {
-  if (font === "Montserrat") return "var(--font-montserrat), sans-serif";
-  if (font === "Inter") return "var(--font-inter), sans-serif";
-  return `'${font}', sans-serif`;
+  const map: Record<string, string> = {
+    Roboto: "var(--font-roboto), sans-serif",
+    "Open Sans": "var(--font-open-sans), sans-serif",
+    Lato: "var(--font-lato), sans-serif",
+    Raleway: "var(--font-raleway), sans-serif",
+    Montserrat: "var(--font-montserrat), sans-serif",
+    Inter: "var(--font-inter), sans-serif",
+  };
+  return map[font] ?? `'${font}', sans-serif`;
 }
 
-/** 8-direction outline shadow approximating libass BorderStyle=1. */
-export function outlineShadow(color: string, widthPx: number): string | undefined {
-  if (widthPx <= 0) return undefined;
-  const w = Math.max(1, Math.round(widthPx));
-  const dirs: [number, number][] = [
-    [w, 0], [-w, 0], [0, w], [0, -w],
-    [w, w], [w, -w], [-w, w], [-w, -w],
-  ];
-  return dirs.map(([x, y]) => `${x}px ${y}px 0 ${color}`).join(", ");
+/** Solid stroke outline for single-line text (hero). Prefer KaraokeLine for multi-word karaoke. */
+export function strokeOutlineStyle(
+  style: StyleConfig,
+  scaleY: number,
+): Pick<CSSProperties, "WebkitTextStroke" | "paintOrder"> | undefined {
+  if (style.box) return undefined;
+  const ow = playResToCss(style.outline_width, scaleY);
+  if (ow <= 0) return undefined;
+  return {
+    WebkitTextStroke: `${ow}px ${style.outline_color}`,
+    paintOrder: "stroke fill",
+  };
 }
 
-/** Preview typography matching ASS/libass output (WYSIWYG). */
+/** Preview typography for a single word (no outline — use KaraokeLine for groups). */
 export function subtitleTextStyle(
   style: StyleConfig,
   scaleY: number,
   opts: { color: string; isActive: boolean; isLastInGroup?: boolean }
 ): CSSProperties {
   const fs = playResToCss(style.font_size, scaleY);
-  const ow = playResToCss(style.outline_width, scaleY);
   const ls = playResToCss(style.letter_spacing ?? 2, scaleY);
-  // Match ass_gen: one space + (word_spacing // 4) extra spaces between words.
   const spaceCount = 1 + Math.floor((style.word_spacing ?? 4) / 4);
   const wordGapEm = spaceCount * 0.28;
   const pop =
@@ -59,26 +72,24 @@ export function subtitleTextStyle(
     color: opts.color,
     fontSize: fs,
     fontFamily: fontFamilyCss(style.font),
-    fontWeight: style.bold ? 800 : 500,
+    fontWeight: style.bold ? 700 : 400,
     fontStyle: style.italic ? "italic" : "normal",
     letterSpacing: `${ls}px`,
     marginRight: opts.isLastInGroup ? 0 : `${wordGapEm}em`,
     lineHeight: 1.15,
-    textShadow: !style.box ? outlineShadow(style.outline_color, ow) : undefined,
     display: opts.isActive && style.animation === "pop" ? "inline-block" : "inline",
     transform: pop,
-    transition: "transform 80ms ease-out, color 80ms",
+    transition: opts.isActive && style.animation === "pop" ? "transform 80ms ease-out" : undefined,
   };
 }
 
 export function findActiveGroup(
   groups: Word[][],
   words: Word[],
-  currentTime: number
+  currentTime: number,
+  opts?: { staticPreview?: boolean },
 ): { group: Word[] | null; activeIdx: number } {
-  const activeIdx = words.findIndex(
-    (w) => currentTime >= w.start - 0.01 && currentTime < w.end
-  );
+  const activeIdx = words.findIndex((w) => isWordActive(w, currentTime));
 
   if (activeIdx >= 0) {
     for (const g of groups) {
@@ -90,12 +101,13 @@ export function findActiveGroup(
   }
 
   for (const g of groups) {
-    if (g[0].start <= currentTime + 0.05 && g[g.length - 1].end >= currentTime - 0.5) {
+    const { start, end } = lineVisibilityWindow(g);
+    if (currentTime >= start && currentTime <= end) {
       return { group: g, activeIdx: activeIdx >= 0 ? activeIdx : words.indexOf(g[0]) };
     }
   }
 
-  if (groups.length > 0) {
+  if (opts?.staticPreview && groups.length > 0) {
     return { group: groups[0], activeIdx: words.indexOf(groups[0][0]) };
   }
   return { group: null, activeIdx: -1 };

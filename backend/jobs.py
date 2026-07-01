@@ -12,6 +12,35 @@ from typing import AsyncIterator, Optional
 ROOT = Path(__file__).resolve().parent.parent / "data" / "jobs"
 
 
+def _read_meta(job_dir: Path) -> dict:
+    meta = job_dir / "meta.json"
+    if not meta.exists():
+        return {}
+    try:
+        return json.loads(meta.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _read_clips_meta(job_dir: Path) -> dict:
+    p = job_dir / "clips.json"
+    if not p.exists():
+        return {}
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def save_meta(job_dir: Path, **fields) -> None:
+    data = _read_meta(job_dir)
+    data.update(fields)
+    try:
+        (job_dir / "meta.json").write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    except Exception:
+        pass
+
+
 class Stage(str, Enum):
     QUEUED = "queued"
     EXTRACTING_AUDIO = "extracting_audio"
@@ -52,6 +81,8 @@ class Job:
         return d
 
     def to_dict(self) -> dict:
+        meta = _read_meta(self.job_dir())
+        clips_data = _read_clips_meta(self.job_dir())
         return {
             "id": self.id,
             "stage": self.stage.value,
@@ -64,6 +95,9 @@ class Job:
             "duration": self.duration,
             "has_words": self.words_path is not None and self.words_path.exists(),
             "has_output": self.output_path is not None and self.output_path.exists(),
+            "mode": meta.get("mode", "legendas"),
+            "clips_ready": bool(clips_data.get("clips")),
+            "clip_count": len(clips_data.get("clips") or []),
         }
 
     def update(self, stage: Optional[Stage] = None, progress: Optional[float] = None,
@@ -97,7 +131,7 @@ def get_job(job_id: str) -> Optional[Job]:
     return _STORE.get(job_id)
 
 
-def create_job(job_id: str, filename: str) -> Job:
+def create_job(job_id: str, filename: str, *, mode: str = "legendas") -> Job:
     job = Job(id=job_id, filename=filename)
     try:
         job._loop = asyncio.get_running_loop()
@@ -105,10 +139,14 @@ def create_job(job_id: str, filename: str) -> Job:
         job._loop = None
     d = job.job_dir()
     job.video_path = d / f"input{Path(filename).suffix.lower() or '.mp4'}"
-    job.audio_path = d / "audio.wav"
+    job.audio_path = d / "audio.mp3"
     job.words_path = d / "words.json"
     job.ass_path = d / "captions.ass"
     job.output_path = d / "output.mp4"
+    try:
+        save_meta(d, filename=filename, mode=mode)
+    except Exception:
+        pass
     _STORE[job_id] = job
     return job
 
@@ -142,24 +180,41 @@ def rehydrate_jobs() -> None:
         if job_id in _STORE:
             continue
         inputs = sorted(d.glob("input.*"))
-        if not inputs:
+        out = d / "output.mp4"
+        wj = d / "words.json"
+        # Keep a job if it has anything meaningful: the original input, a
+        # finished render, or a transcription. (Rendered jobs lose their input
+        # because it's deleted to save space — they must NOT be dropped.)
+        if not inputs and not out.exists() and not wj.exists():
             continue
-        video = inputs[0]
-        job = Job(id=job_id, filename=video.name)
+        # Recover the original filename from meta.json when the input is gone.
+        filename = inputs[0].name if inputs else "video.mp4"
+        meta = d / "meta.json"
+        if meta.exists():
+            try:
+                filename = json.loads(meta.read_text(encoding="utf-8")).get("filename", filename)
+            except Exception:
+                pass
+        video = inputs[0] if inputs else None
+        job = Job(id=job_id, filename=filename)
         job.created_at = d.stat().st_mtime
         job.video_path = video
-        job.audio_path = d / "audio.wav"
-        job.words_path = d / "words.json"
+        job.audio_path = d / "audio.mp3"
+        if not job.audio_path.exists() and (d / "audio.wav").exists():
+            job.audio_path = d / "audio.wav"
+        job.words_path = wj
         job.ass_path = d / "captions.ass"
-        job.output_path = d / "output.mp4"
-        try:
-            info = probe_video(video)
-            job.width = info["width"]
-            job.height = info["height"]
-            job.fps = info["fps"]
-            job.duration = info["duration"]
-        except Exception:
-            pass
+        job.output_path = out
+        probe_target = video if video else (out if out.exists() else None)
+        if probe_target is not None:
+            try:
+                info = probe_video(probe_target)
+                job.width = info["width"]
+                job.height = info["height"]
+                job.fps = info["fps"]
+                job.duration = info["duration"]
+            except Exception:
+                pass
         if job.output_path.exists():
             job.stage = Stage.DONE
             job.progress = 1.0

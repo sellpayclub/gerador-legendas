@@ -6,13 +6,27 @@ to ASS BGR (&HBBGGRR&) at generation time.
 from __future__ import annotations
 
 from dataclasses import dataclass, asdict
-from typing import Optional
+from typing import Literal, Optional
+
+TextCase = Literal["normal", "upper", "lower"]
+
+# Bundled in backend/fonts/ — must match StylePicker + subtitleLayout.
+AVAILABLE_FONTS = (
+    "Roboto",
+    "Open Sans",
+    "Lato",
+    "Raleway",
+    "Inter",
+    "Montserrat",
+)
 
 
 @dataclass
 class StyleConfig:
-    font: str = "Montserrat"
+    font: str = "Roboto"
     font_size: int = 72
+    text_case: TextCase = "normal"
+    pause_threshold_s: float = 0.45
     primary_color: str = "#FACC15"   # highlighted (karaoke fill target)
     secondary_color: str = "#FFFFFF" # base text
     outline_color: str = "#000000"
@@ -32,6 +46,8 @@ class StyleConfig:
     margin_v: int = 120              # used when pos is None
     letter_spacing: int = 2          # ASS Spacing field (px between chars)
     word_spacing: int = 4            # extra px gap between words at PlayRes
+    # Per-word pop scale (%) applied to keyword words when spoken (CapCut style).
+    keyword_scale: int = 180
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -39,25 +55,25 @@ class StyleConfig:
 
 PRESETS: dict[str, dict] = {
     "capcut_amarelo": {
-        "font": "Montserrat", "font_size": 72,
+        "font": "Roboto", "font_size": 72,
         "primary_color": "#FACC15", "secondary_color": "#FFFFFF",
         "outline_color": "#000000", "outline_width": 8,
         "bold": True, "animation": "pop", "pop_scale": 115,
     },
     "capcut_ciano": {
-        "font": "Montserrat", "font_size": 72,
+        "font": "Roboto", "font_size": 72,
         "primary_color": "#22D3EE", "secondary_color": "#FFFFFF",
         "outline_color": "#000000", "outline_width": 8,
         "bold": True, "animation": "pop", "pop_scale": 115,
     },
     "minimalista": {
-        "font": "Inter", "font_size": 64,
+        "font": "Open Sans", "font_size": 64,
         "primary_color": "#EC4899", "secondary_color": "#FFFFFF",
         "outline_color": "#000000", "outline_width": 2,
         "bold": False, "animation": "none",
     },
     "youtube_caixa": {
-        "font": "Arial", "font_size": 56,
+        "font": "Roboto", "font_size": 56,
         "primary_color": "#FFFFFF", "secondary_color": "#CCCCCC",
         "outline_color": "#000000", "outline_width": 2,
         "bold": True, "animation": "none",

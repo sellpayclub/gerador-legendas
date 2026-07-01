@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Upload, Loader2, Film, Trash2 } from "lucide-react";
+import { Upload, Loader2, Film, Trash2, Scissors, Type } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { uploadVideo, deleteJob, type JobState } from "@/lib/api";
 
@@ -17,6 +17,8 @@ const LANGUAGES: { value: string; label: string }[] = [
   { value: "de", label: "Alemão (Deutsch)" },
 ];
 
+type AppMode = "legendas" | "cortes";
+
 export default function HomePage() {
   const router = useRouter();
   const inputRef = useRef<HTMLInputElement>(null);
@@ -26,9 +28,12 @@ export default function HomePage() {
   const [progress, setProgress] = useState<number | null>(null);
   const [recentJobs, setRecentJobs] = useState<JobState[]>([]);
   const [language, setLanguage] = useState("auto");
+  const [mode, setMode] = useState<AppMode>("legendas");
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const languageRef = useRef("auto");
+  const modeRef = useRef<AppMode>("legendas");
   languageRef.current = language;
+  modeRef.current = mode;
 
   const loadJobs = useCallback(async () => {
     try {
@@ -43,6 +48,9 @@ export default function HomePage() {
   useEffect(() => {
     loadJobs();
   }, [loadJobs]);
+
+  const jobRoute = (j: JobState) =>
+    j.mode === "cortes" ? `/cortes/${j.id}` : `/editor/${j.id}`;
 
   const handleDelete = useCallback(
     async (jobId: string) => {
@@ -59,7 +67,7 @@ export default function HomePage() {
         setDeletingId(null);
       }
     },
-    [loadJobs]
+    [loadJobs],
   );
 
   const handleFile = useCallback(
@@ -72,36 +80,63 @@ export default function HomePage() {
       }
       setUploading(true);
       setProgress(0);
-      // Fake progress while uploading (XHR for real progress would be nicer)
       const fakeTimer = setInterval(() => {
         setProgress((p) => (p === null ? 0 : Math.min(95, p + 5)));
       }, 400);
       try {
-        const job = await uploadVideo(file, languageRef.current);
+        const job = await uploadVideo(file, languageRef.current, modeRef.current);
         setProgress(100);
-        router.push(`/editor/${job.id}`);
-      } catch (e: any) {
-        setError(e.message ?? "Erro no upload");
+        router.push(modeRef.current === "cortes" ? `/cortes/${job.id}` : `/editor/${job.id}`);
+      } catch (e: unknown) {
+        setError(e instanceof Error ? e.message : "Erro no upload");
       } finally {
         clearInterval(fakeTimer);
         setUploading(false);
       }
     },
-    [router]
+    [router],
   );
 
   return (
     <main className="flex flex-col items-center py-12">
       <div className="mb-10 text-center">
-        <h1 className="text-4xl font-bold tracking-tight">
-          Gerador de Legendas
-        </h1>
+        <h1 className="text-4xl font-bold tracking-tight">Legendas Locais</h1>
+        <p className="mt-2 text-sm text-zinc-500">
+          Legendas automáticas ou cortes virais de vídeos longos
+        </p>
       </div>
 
       <div className="mb-4 w-full max-w-2xl">
-        <label className="mb-1 block text-xs font-medium text-zinc-400">
-          Idioma do áudio
-        </label>
+        <label className="mb-1 block text-xs font-medium text-zinc-400">Modo</label>
+        <div className="mb-4 flex gap-2">
+          <button
+            type="button"
+            onClick={() => setMode("legendas")}
+            disabled={uploading}
+            className={`flex flex-1 items-center justify-center gap-2 rounded-lg border px-4 py-3 text-sm font-medium transition ${
+              mode === "legendas"
+                ? "border-accent bg-accent/10 text-accent"
+                : "border-border bg-panel text-zinc-400 hover:text-zinc-200"
+            }`}
+          >
+            <Type className="h-4 w-4" />
+            Legendas
+          </button>
+          <button
+            type="button"
+            onClick={() => setMode("cortes")}
+            disabled={uploading}
+            className={`flex flex-1 items-center justify-center gap-2 rounded-lg border px-4 py-3 text-sm font-medium transition ${
+              mode === "cortes"
+                ? "border-accent bg-accent/10 text-accent"
+                : "border-border bg-panel text-zinc-400 hover:text-zinc-200"
+            }`}
+          >
+            <Scissors className="h-4 w-4" />
+            Cortes
+          </button>
+        </div>
+        <label className="mb-1 block text-xs font-medium text-zinc-400">Idioma do áudio</label>
         <select
           value={language}
           onChange={(e) => setLanguage(e.target.value)}
@@ -114,6 +149,11 @@ export default function HomePage() {
             </option>
           ))}
         </select>
+        {mode === "cortes" && (
+          <p className="mt-2 text-xs text-zinc-500">
+            Ideal para vídeos de 10–60 min. A IA encontra trechos de 1–3 min com sacadas e gera MP4s com legenda.
+          </p>
+        )}
       </div>
 
       <div
@@ -167,7 +207,7 @@ export default function HomePage() {
             </div>
             <div className="text-lg font-medium">Arraste o vídeo ou clique para escolher</div>
             <div className="text-xs text-zinc-500">
-              MP4, MOV, MKV, AVI, WebM — até ~2 GB — 5 a 30 min recomendado
+              MP4, MOV, MKV, AVI, WebM — vídeos longos OK no modo Cortes
             </div>
           </button>
         )}
@@ -187,14 +227,26 @@ export default function HomePage() {
               <li key={j.id}>
                 <div className="flex w-full items-center gap-3 rounded-lg border border-border bg-panel px-4 py-3 hover:border-accent/50">
                   <button
-                    onClick={() => router.push(`/editor/${j.id}`)}
+                    onClick={() => router.push(jobRoute(j))}
                     className="flex flex-1 items-center gap-3 truncate text-left"
                   >
-                    <Film className="h-5 w-5 shrink-0 text-accent" />
+                    {j.mode === "cortes" ? (
+                      <Scissors className="h-5 w-5 shrink-0 text-accent" />
+                    ) : (
+                      <Film className="h-5 w-5 shrink-0 text-accent" />
+                    )}
                     <div className="flex-1 truncate">
-                      <div className="truncate text-sm">{j.filename}</div>
+                      <div className="flex items-center gap-2 truncate">
+                        <span className="truncate text-sm">{j.filename}</span>
+                        {j.mode === "cortes" && (
+                          <span className="shrink-0 rounded bg-accent/10 px-1.5 py-0.5 text-[10px] text-accent">
+                            Cortes
+                          </span>
+                        )}
+                      </div>
                       <div className="text-xs text-zinc-500">
                         {j.stage} · {Math.round(j.duration / 60)} min
+                        {j.clip_count ? ` · ${j.clip_count} cortes` : ""}
                       </div>
                     </div>
                   </button>

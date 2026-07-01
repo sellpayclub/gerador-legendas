@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { ArrowLeft, Download, Loader2, CheckCircle2 } from "lucide-react";
+import { ArrowLeft, Download, Loader2, CheckCircle2, Plus } from "lucide-react";
 import ProgressBar from "@/components/ProgressBar";
 import { getJob, outputUrl, type JobState } from "@/lib/api";
 import { useJobEvents } from "@/lib/useJobEvents";
@@ -49,14 +49,24 @@ export default function RenderPage() {
             controls
             className="mb-4 w-full rounded-lg bg-black"
           />
-          <a
-            href={outputUrl(jobId)}
-            download={`legendado_${current?.filename ?? "video.mp4"}`}
-            className="inline-flex items-center gap-2 rounded-lg bg-accent px-5 py-3 font-semibold text-bg"
-          >
-            <Download className="h-5 w-5" />
-            Baixar MP4 legendado
-          </a>
+          <div className="flex flex-wrap gap-3">
+            <a
+              href={outputUrl(jobId)}
+              download={`legendado_${current?.filename ?? "video.mp4"}`}
+              className="inline-flex items-center gap-2 rounded-lg bg-accent px-5 py-3 font-semibold text-bg"
+            >
+              <Download className="h-5 w-5" />
+              Baixar MP4 legendado
+            </a>
+            <button
+              type="button"
+              onClick={() => router.push("/")}
+              className="inline-flex items-center gap-2 rounded-lg border border-border bg-panel px-5 py-3 font-semibold text-zinc-100 hover:bg-border/40"
+            >
+              <Plus className="h-5 w-5" />
+              Novo vídeo
+            </button>
+          </div>
         </div>
       )}
 

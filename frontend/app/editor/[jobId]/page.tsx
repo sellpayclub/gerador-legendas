@@ -2,26 +2,36 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { ArrowLeft, Loader2, Sparkles, Type, ScrollText, Wand2 } from "lucide-react";
+import { ArrowLeft, LayoutTemplate, Loader2, Sparkles, Type, ScrollText, Wand2, Zap } from "lucide-react";
 import VideoPreview from "@/components/VideoPreview";
 import StylePicker from "@/components/StylePicker";
 import TranscriptEditor from "@/components/TranscriptEditor";
+import TemplatePanel from "@/components/TemplatePanel";
+import TemplatePreview from "@/components/TemplatePreview";
+import HighlightPanel from "@/components/HighlightPanel";
+import { groupHighlightPhrases } from "@/lib/highlightPhrases";
 import {
   getJob,
+  getKeywords,
   getWords,
+  listTemplates,
+  saveKeywords,
   saveWords,
   startRender,
   startTranscribe,
   type JobState,
+  type ResolutionInfo,
   type StyleConfig,
+  type TemplateInfo,
   type Word,
   type WordsData,
 } from "@/lib/api";
 import { useJobEvents } from "@/lib/useJobEvents";
 
 const DEFAULT_STYLE: StyleConfig = {
-  font: "Montserrat",
+  font: "Roboto",
   font_size: 72,
+  text_case: "normal",
   primary_color: "#FACC15",
   secondary_color: "#FFFFFF",
   outline_color: "#000000",
@@ -40,9 +50,10 @@ const DEFAULT_STYLE: StyleConfig = {
   margin_v: 120,
   letter_spacing: 2,
   word_spacing: 4,
+  pause_threshold_s: 0.45,
 };
 
-type Tab = "style" | "transcript";
+type Tab = "style" | "transcript" | "template" | "highlight";
 
 export default function EditorPage() {
   const params = useParams<{ jobId: string }>();
@@ -58,11 +69,34 @@ export default function EditorPage() {
   const [tab, setTab] = useState<Tab>("style");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Template / composition state
+  const [templates, setTemplates] = useState<TemplateInfo[]>([]);
+  const [resolutions, setResolutions] = useState<ResolutionInfo[]>([]);
+  const [selectedTemplate, setSelectedTemplate] = useState<string | null>(null);
+  const [resolution, setResolution] = useState<"480p" | "720p" | "1080p">("1080p");
+  const [overlayAsset, setOverlayAsset] = useState<string | null>(null);
+  const [keywords, setKeywords] = useState<number[]>([]);
+  const [highlightEnabled, setHighlightEnabled] = useState(false);
+  const [videoPos, setVideoPos] = useState<{ x: number; y: number }>({ x: 0.5, y: 0.5 });
   const [rendering, setRendering] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
 
   const videoControlsRef = useRef<{ seek: (t: number) => void; getCurrentTime: () => number } | null>(null);
   const retriedTranscribe = useRef(false);
+
+  // Load template list once.
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      try {
+        const r = await listTemplates();
+        if (!active) return;
+        setTemplates(r.templates ?? []);
+        setResolutions(r.resolutions ?? []);
+      } catch { /* ignore */ }
+    })();
+    return () => { active = false; };
+  }, []);
 
   // Initial fetch + decide whether to start transcribing
   useEffect(() => {
@@ -113,9 +147,54 @@ export default function EditorPage() {
     }
   }, [liveJob]);
 
+  // Fallback polling: if SSE drops/misses the completion event, keep asking the
+  // backend until the transcription exists so the UI never gets stuck loading.
+  useEffect(() => {
+    if (wordsData) return;
+    if (job?.stage === "error") return;
+    const id = setInterval(async () => {
+      try {
+        const j = await getJob(jobId);
+        setJob(j);
+        if (j.stage === "error") {
+          setError(j.message || "Falha ao processar o vídeo.");
+          return;
+        }
+        if (j.has_words) {
+          const w = await getWords(jobId);
+          setWordsData(w);
+          setWords(w.words);
+        }
+      } catch {
+        /* ignore transient errors, keep polling */
+      }
+    }, 3000);
+    return () => clearInterval(id);
+  }, [jobId, wordsData, job?.stage]);
+
+  // Load saved keyword/effect selections when words exist.
+  useEffect(() => {
+    if (!words.length) return;
+    let active = true;
+    getKeywords(jobId)
+      .then((r) => {
+        if (!active) return;
+        if (r.indices?.length) setKeywords(r.indices);
+      })
+      .catch(() => {});
+    return () => { active = false; };
+  }, [jobId, words.length]);
+
   // When transcription completes, fetch words
   useEffect(() => {
     if (liveJob?.has_words) {
+      getWords(jobId).then((w) => {
+        setWordsData(w);
+        setWords(w.words);
+      }).catch(() => {});
+    }
+    // Background punctuation finished — refresh transcript text.
+    if (liveJob?.stage === "transcribed" && liveJob.message?.includes("pontuação")) {
       getWords(jobId).then((w) => {
         setWordsData(w);
         setWords(w.words);
@@ -128,7 +207,26 @@ export default function EditorPage() {
       // being bounced to the render screen.
       router.push(`/render/${jobId}`);
     }
-  }, [liveJob?.stage, liveJob?.has_words, jobId, words.length, router]);
+  }, [liveJob?.stage, liveJob?.has_words, liveJob?.message, jobId, words.length, router]);
+
+  // Fallback: refresh words when background punctuation finishes (SSE can miss updates).
+  useEffect(() => {
+    if (liveJob?.stage !== "transcribed") return;
+    if (liveJob.message?.includes("pontuação")) return;
+    const id = setInterval(async () => {
+      try {
+        const j = await getJob(jobId);
+        if (j.message?.includes("pontuação")) {
+          const w = await getWords(jobId);
+          setWordsData(w);
+          setWords(w.words);
+        }
+      } catch {
+        /* ignore */
+      }
+    }, 4000);
+    return () => clearInterval(id);
+  }, [jobId, liveJob?.stage, liveJob?.message]);
 
   // Poll currentTime of video for transcript highlight
   useEffect(() => {
@@ -144,18 +242,52 @@ export default function EditorPage() {
 
   const handleRender = async () => {
     if (!wordsData) return;
+    if (selectedTemplate) {
+      const tpl = templates.find(t => t.id === selectedTemplate);
+      if (tpl?.needs_overlay && !overlayAsset) {
+        alert("Este template exige uma mídia (imagem/vídeo). Envie uma na aba Template.");
+        setRendering(false);
+        return;
+      }
+    }
+    if (highlightEnabled && keywords.length === 0) {
+      alert("Ative frases de destaque na aba Destaques, ou desligue o efeito.");
+      setRendering(false);
+      return;
+    }
     setRendering(true);
-    await startRender(jobId, {
-      preset: null,
-      custom: style,
-      words_per_line: wordsPerLine,
-      pos_x: position.x,
-      pos_y: position.y,
-    });
-    router.push(`/render/${jobId}`);
+    try {
+      await saveWords(jobId, words);
+      if (highlightEnabled) {
+        await saveKeywords(jobId, keywords);
+      }
+      await startRender(jobId, {
+        preset: null,
+        custom: style,
+        words_per_line: wordsPerLine,
+        pos_x: position.x,
+        pos_y: position.y,
+        template: selectedTemplate,
+        resolution,
+        highlight_enabled: highlightEnabled,
+        keywords: highlightEnabled && keywords.length > 0 ? keywords : null,
+        highlight_effects: null,
+        overlay_asset: selectedTemplate ? overlayAsset : null,
+        video_pos_x: selectedTemplate ? videoPos.x : null,
+        video_pos_y: selectedTemplate ? videoPos.y : null,
+      });
+      router.push(`/render/${jobId}`);
+    } catch {
+      setRendering(false);
+    }
   };
 
   const stageLabel = useMemo(() => labelForStage(job?.stage ?? ""), [job?.stage]);
+
+  const highlightPhrases = useMemo(
+    () => (highlightEnabled ? groupHighlightPhrases(words, keywords) : []),
+    [words, keywords, highlightEnabled],
+  );
 
   if (loading) {
     return (
@@ -173,10 +305,13 @@ export default function EditorPage() {
     );
   }
 
-  const transcribing = job?.stage === "transcribing" || job?.stage === "extracting_audio";
-  // Overlay só enquanto transcreve ou aguarda palavras (não trava se job já tem words no servidor).
+  const processing =
+    job?.stage === "queued" ||
+    job?.stage === "extracting_audio" ||
+    job?.stage === "audio_ready" ||
+    job?.stage === "transcribing";
   const notReady =
-    transcribing ||
+    processing ||
     (words.length === 0 && job && !job.has_words && job.stage !== "error");
   const transcribePct = Math.round((job?.progress ?? 0) * 100);
 
@@ -195,10 +330,25 @@ export default function EditorPage() {
       </div>
 
       <div className="flex min-h-0 flex-1 flex-row gap-3 overflow-hidden">
-        {/* Esquerda: vídeo sempre visível */}
+        {/* Esquerda: vídeo/template sempre visível */}
         <div className="flex min-h-0 min-w-0 flex-1 flex-col items-center justify-center gap-2 overflow-hidden rounded-xl border border-border bg-panel/30 p-3">
           <div className="flex min-h-0 w-full flex-1 items-center justify-center overflow-hidden">
-            {job && (
+            {job && selectedTemplate && templates.find(t => t.id === selectedTemplate) ? (
+              <TemplatePreview
+                jobId={jobId}
+                template={templates.find(t => t.id === selectedTemplate)!}
+                overlayAsset={overlayAsset}
+                words={words}
+                style={style}
+                wordsPerLine={wordsPerLine}
+                currentTime={currentTime}
+                highlightEnabled={highlightEnabled}
+                highlightPhrases={highlightPhrases}
+                videoPos={videoPos}
+                onVideoPosChange={setVideoPos}
+                registerControls={(c) => (videoControlsRef.current = c)}
+              />
+            ) : job && (
               <VideoPreview
                 jobId={jobId}
                 width={job.width}
@@ -210,14 +360,16 @@ export default function EditorPage() {
                 position={position}
                 isPlaceholder={words.length === 0}
                 compact
+                highlightEnabled={highlightEnabled}
+                highlightPhrases={highlightPhrases}
                 registerControls={(c) => (videoControlsRef.current = c)}
               />
             )}
           </div>
           <div className="flex w-full max-w-md shrink-0 items-center gap-3 rounded-lg border border-border bg-panel px-3 py-2 text-sm">
-            <div className={`h-2 w-2 shrink-0 rounded-full ${transcribing ? "animate-pulse bg-accent" : job?.stage === "done" ? "bg-green-500" : "bg-zinc-500"}`} />
+            <div className={`h-2 w-2 shrink-0 rounded-full ${processing ? "animate-pulse bg-accent" : job?.stage === "done" ? "bg-green-500" : "bg-zinc-500"}`} />
             <span className="truncate text-zinc-300">{stageLabel}</span>
-            {transcribing && job?.progress !== undefined && (
+            {processing && job?.progress !== undefined && (
               <span className="shrink-0 text-zinc-500">{Math.round((job.progress ?? 0) * 100)}%</span>
             )}
           </div>
@@ -226,12 +378,35 @@ export default function EditorPage() {
         {/* Direita: ajustes com scroll próprio */}
         <div className="flex min-h-0 w-[340px] shrink-0 flex-col overflow-hidden rounded-xl border border-border bg-panel sm:w-[380px] xl:w-[440px]">
           <div className="flex shrink-0 border-b border-border">
+            <TabButton active={tab === "template"} onClick={() => setTab("template")} icon={<LayoutTemplate className="h-4 w-4" />} label="Template" />
+            <TabButton active={tab === "highlight"} onClick={() => setTab("highlight")} icon={<Zap className="h-4 w-4" />} label="Destaques" />
             <TabButton active={tab === "style"} onClick={() => setTab("style")} icon={<Type className="h-4 w-4" />} label="Estilo" />
             <TabButton active={tab === "transcript"} onClick={() => setTab("transcript")} icon={<ScrollText className="h-4 w-4" />} label="Transcrição" />
           </div>
 
           <div className="min-h-0 flex-1 overflow-y-auto">
-            {tab === "style" ? (
+            {tab === "template" ? (
+              <TemplatePanel
+                jobId={jobId}
+                templates={templates}
+                resolutions={resolutions}
+                selectedTemplate={selectedTemplate}
+                onTemplateChange={setSelectedTemplate}
+                resolution={resolution}
+                onResolutionChange={setResolution}
+                overlayAsset={overlayAsset}
+                onOverlayAssetChange={setOverlayAsset}
+              />
+            ) : tab === "highlight" ? (
+              <HighlightPanel
+                jobId={jobId}
+                words={words}
+                highlightEnabled={highlightEnabled}
+                onHighlightEnabledChange={setHighlightEnabled}
+                keywords={keywords}
+                onKeywordsChange={setKeywords}
+              />
+            ) : tab === "style" ? (
               <div className="p-4">
                 <StylePicker
                   style={style}
@@ -246,13 +421,14 @@ export default function EditorPage() {
               </div>
             ) : (
               <div className="flex min-h-[240px] flex-col lg:min-h-0 lg:h-full">
-                {transcribing ? (
+                {processing ? (
                   <div className="flex flex-1 items-center justify-center text-sm text-zinc-400">
                     <Loader2 className="mr-2 h-5 w-5 animate-spin" />
                     Transcrevendo... aguarde para editar.
                   </div>
                 ) : words.length > 0 ? (
                   <TranscriptEditor
+                    jobId={jobId}
                     words={words}
                     onChange={setWords}
                     onSave={handleSaveWords}
@@ -285,7 +461,7 @@ export default function EditorPage() {
       </div>
 
       {notReady && (
-        <TranscribingOverlay stage={stageLabel} pct={transcribePct} active={transcribing} />
+        <TranscribingOverlay stage={stageLabel} pct={transcribePct} active={processing} />
       )}
     </main>
   );
@@ -347,7 +523,7 @@ function labelForStage(stage: string): string {
   switch (stage) {
     case "queued": return "Na fila";
     case "extracting_audio": return "Extraindo áudio...";
-    case "audio_ready": return "Áudio pronto";
+    case "audio_ready": return "Áudio pronto — iniciando transcrição...";
     case "transcribing": return "Transcrevendo com Whisper...";
     case "transcribed": return "Transcrição concluída";
     case "generating_ass": return "Gerando legendas ASS";

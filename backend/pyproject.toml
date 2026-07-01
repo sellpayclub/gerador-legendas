@@ -20,4 +20,4 @@ dependencies = [
 dev = ["ruff>=0.4"]
 
 [tool.setuptools]
-py-modules = ["main", "transcribe", "ass_gen", "render", "jobs", "presets", "media"]
+py-modules = ["main", "transcribe", "ass_gen", "render", "jobs", "presets", "media", "fonts_util", "timing", "effects", "keywords", "compose", "templates", "enrich"]

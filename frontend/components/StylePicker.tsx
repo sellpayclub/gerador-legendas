@@ -14,7 +14,7 @@ type Props = {
   onPositionChange: (pos: { x: number | null; y: number | null }) => void;
 };
 
-const FONTS = ["Montserrat", "Inter", "Arial", "Helvetica", "Verdana", "Impact", "Georgia", "Comic Sans MS"];
+const FONTS = ["Roboto", "Open Sans", "Lato", "Raleway", "Inter", "Montserrat"] as const;
 
 export default function StylePicker({
   style,
@@ -73,6 +73,28 @@ export default function StylePicker({
             ))}
           </select>
         </Field>
+        <Field label="Caixa">
+          <div className="flex gap-2">
+            {([
+              ["normal", "Normal"],
+              ["upper", "MAIÚSCULAS"],
+              ["lower", "minúsculas"],
+            ] as const).map(([value, label]) => (
+              <button
+                key={value}
+                type="button"
+                onClick={() => set({ text_case: value })}
+                className={`flex-1 rounded-lg border px-2 py-2 text-xs ${
+                  (style.text_case ?? "normal") === value
+                    ? "border-accent bg-accent/10 text-accent"
+                    : "border-border bg-panel text-zinc-300"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </Field>
         <Field label={`Tamanho: ${style.font_size}px`}>
           <input
             type="range" min={20} max={160} value={style.font_size}
@@ -80,12 +102,26 @@ export default function StylePicker({
             className="w-full"
           />
         </Field>
-        <Field label={`Palavras por linha: ${wordsPerLine}`}>
+        <Field label={`Palavras por linha (máx.): ${wordsPerLine}`}>
           <input
             type="range" min={1} max={8} value={wordsPerLine}
             onChange={(e) => onWordsPerLineChange(+e.target.value)}
             className="w-full"
           />
+        </Field>
+        <Field label={`Sensibilidade de pausa: ${(style.pause_threshold_s ?? 0.45).toFixed(2)}s`}>
+          <input
+            type="range"
+            min={0.25}
+            max={0.8}
+            step={0.05}
+            value={style.pause_threshold_s ?? 0.45}
+            onChange={(e) => set({ pause_threshold_s: +e.target.value })}
+            className="w-full"
+          />
+          <p className="mt-1 text-[10px] text-zinc-500">
+            Quebra a linha quando há silêncio maior que este valor. Menor = mais sensível.
+          </p>
         </Field>
         <Field label={`Espaçamento de letras: ${letterSpacing}px`}>
           <input
@@ -144,7 +180,7 @@ export default function StylePicker({
         </div>
         <Field label={`Espessura contorno: ${style.outline_width}px`}>
           <input
-            type="range" min={0} max={16} value={style.outline_width}
+            type="range" min={0} max={24} value={style.outline_width}
             onChange={(e) => set({ outline_width: +e.target.value })}
             className="w-full"
           />
