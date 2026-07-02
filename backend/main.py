@@ -1140,7 +1140,14 @@ async def get_clips_route(job_id: str) -> dict:
     if not data:
         return {"clips": [], "manual": False, "detecting": detecting, "detect_error": None}
     if not detecting and data.get("detecting"):
-        clips.clear_detecting(job.job_dir())
+        if not (data.get("clips")):
+            data = dict(data)
+            data["detect_error"] = (
+                "Detecção interrompida (servidor reiniciou?). Clique em Detectar de novo."
+            )
+            clips.save_clips(job.job_dir(), data)
+        else:
+            clips.clear_detecting(job.job_dir())
         data = clips.load_clips(job.job_dir()) or data
     data["detecting"] = detecting
     data.setdefault("detect_error", None)

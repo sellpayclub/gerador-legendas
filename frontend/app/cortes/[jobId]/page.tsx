@@ -255,6 +255,9 @@ export default function CortesPage() {
           setClipList(clipsData.clips);
           setActiveClipId(clipsData.clips[0].id);
         }
+        if (clipsData?.detect_error) {
+          setError(clipsData.detect_error);
+        }
         if (clipsData?.detecting) {
           resumeDetectRef.current = true;
         }
@@ -610,7 +613,9 @@ export default function CortesPage() {
     setClipList(list);
     clipWordsCache.current = {};
     if (list.length) setActiveClipId(list[0].id);
-    if (!list.length) {
+    if (r.detect_error) {
+      setError(r.detect_error);
+    } else if (!list.length) {
       setError("Nenhum corte encontrado — tente de novo ou ajuste manualmente.");
     }
     setDetecting(false);

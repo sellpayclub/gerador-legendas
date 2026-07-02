@@ -27,7 +27,7 @@ class Settings:
     openai_base_url: str = ""
     transcribe_engine: str = "openai"
     openai_model: str = "whisper-1"
-    clips_model: str = "gpt-5.5"
+    clips_model: str = "gpt-4o"
     keywords_model: str = "gpt-4o-mini"
     enrich_model: str = "gpt-4o-mini"
     allowed_origins: list[str] = field(default_factory=list)
@@ -271,7 +271,7 @@ def get_openai_model() -> str:
 
 
 def get_clips_model() -> str:
-    return get().clips_model or "gpt-5.5"
+    return get().clips_model or "gpt-4o"
 
 
 def get_keywords_model() -> str:

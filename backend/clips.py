@@ -11,10 +11,12 @@ from typing import Optional
 from dotenv import load_dotenv
 
 from timing import gap_after
-from openai_chat import chat_json
+from openai_chat import chat_json, completion_token_budget, uses_max_completion_tokens
 from app_settings import get_clips_model
 
 load_dotenv()
+
+FALLBACK_CLIPS_MODEL = "gpt-4o"
 
 MIN_CLIP_S = 45.0
 TARGET_MIN_S = 45.0
@@ -514,13 +516,36 @@ def _transcript_blocks(words: list[dict], block_size: int = CHUNK_WORDS) -> list
     return lines
 
 
-def _openai_json(system: str, user: str, *, max_tokens: int = 2500) -> dict:
-    return chat_json(
-        get_clips_model(), system, user,
-        max_tokens=max_tokens,
-        temperature=0.5,
-        timeout=300,
-    )
+def _openai_json(system: str, user: str, *, max_tokens: int = 2500, model: str | None = None) -> dict:
+    primary = model or get_clips_model()
+    models = [primary]
+    if primary != FALLBACK_CLIPS_MODEL:
+        models.append(FALLBACK_CLIPS_MODEL)
+
+    last_error: Exception | None = None
+    for model in models:
+        budget = completion_token_budget(model, max_tokens)
+        temp = 0.5 if not uses_max_completion_tokens(model) else None
+        for attempt in range(2):
+            try:
+                data = chat_json(
+                    model, system, user,
+                    max_tokens=budget,
+                    temperature=temp,
+                    timeout=300,
+                )
+                if data:
+                    if model != primary:
+                        print(f"[clips] fallback {model} OK (primário {primary} falhou)", flush=True)
+                    return data
+            except Exception as exc:
+                last_error = exc
+                print(f"[clips] {model} tentativa {attempt + 1}: {exc}", flush=True)
+                budget = min(int(budget * 1.5), 32000)
+
+    if last_error:
+        raise last_error
+    return {}
 
 
 def _clip_selection_system(lang_hint: str, target: int, duration: float, word_count: int) -> str:
@@ -579,7 +604,13 @@ def _transcript_full(words: list[dict]) -> str:
     return " ".join(parts)
 
 
-def _call_gpt_clips(words: list[dict], duration: float, language: str) -> list[dict]:
+def _call_gpt_clips(
+    words: list[dict],
+    duration: float,
+    language: str,
+    *,
+    model: str | None = None,
+) -> list[dict]:
     lang_hint = ""
     if language and language != "auto":
         lang_hint = f" O idioma falado é {language}."
@@ -591,7 +622,7 @@ def _call_gpt_clips(words: list[dict], duration: float, language: str) -> list[d
 
     if len(words) <= SINGLE_PASS_WORDS:
         system = _clip_selection_system(lang_hint, target, duration, len(words))
-        data = _openai_json(system, _transcript_full(words), max_tokens=6000)
+        data = _openai_json(system, _transcript_full(words), max_tokens=6000, model=model)
         all_raw.extend(data.get("clips") or [])
     else:
         candidates: list[dict] = []
@@ -599,7 +630,7 @@ def _call_gpt_clips(words: list[dict], duration: float, language: str) -> list[d
         sum_system = _summarize_block_system(lang_hint)
         for i, block in enumerate(blocks, 1):
             print(f"[clips] Analisando bloco {i}/{len(blocks)}...", flush=True)
-            data = _openai_json(sum_system, block, max_tokens=2500)
+            data = _openai_json(sum_system, block, max_tokens=2500, model=model)
             candidates.extend(data.get("candidates") or data.get("clips") or [])
 
         if candidates:
@@ -622,13 +653,13 @@ def _call_gpt_clips(words: list[dict], duration: float, language: str) -> list[d
                 "\n\nTranscrição completa (word_idx:palavra@tempo):\n" + _transcript_full(words)
             )
             print(f"[clips] Selecionando melhores cortes entre {len(candidates)} candidatos...", flush=True)
-            data = _openai_json(pick_system, pick_user, max_tokens=6000)
+            data = _openai_json(pick_system, pick_user, max_tokens=6000, model=model)
             all_raw.extend(data.get("clips") or [])
         else:
             blocks = _transcript_blocks(words)
             system = _clip_selection_system(lang_hint, target, duration, len(words))
             for block in blocks:
-                data = _openai_json(system, block, max_tokens=3000)
+                data = _openai_json(system, block, max_tokens=3000, model=model)
                 all_raw.extend(data.get("clips") or [])
 
     normalized: list[dict] = []
@@ -659,15 +690,26 @@ def detect_clips(
         payload.update({"clips": [], "model": get_clips_model(), "manual": False})
         return save_clips(job_dir, payload)
 
+    model_used = get_clips_model()
     detected = _call_gpt_clips(words, duration, language)
+    if not detected and model_used != FALLBACK_CLIPS_MODEL:
+        print(f"[clips] 0 cortes com {model_used} — retentando pipeline com {FALLBACK_CLIPS_MODEL}", flush=True)
+        detected = _call_gpt_clips(words, duration, language, model=FALLBACK_CLIPS_MODEL)
+        if detected:
+            model_used = FALLBACK_CLIPS_MODEL
+
     prev = load_clips(job_dir) or {}
     payload = _merge_settings(prev)
     payload.update({
         "clips": detected,
-        "model": get_clips_model(),
+        "model": model_used,
         "manual": False,
         "detecting": False,
-        "detect_error": None,
+        "detect_error": (
+            "Nenhum corte encontrado pela IA — tente Detectar de novo ou use gpt-4o em Configurações."
+            if not detected
+            else None
+        ),
     })
     return save_clips(job_dir, payload)
 

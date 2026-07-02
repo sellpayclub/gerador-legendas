@@ -102,11 +102,29 @@ def chat_json(
         response_format={"type": "json_object"},
         timeout=timeout,
     )
-    raw = chat_message_content(data) or "{}"
+    raw = chat_message_content(data) or ""
+    if not raw.strip():
+        choice = data.get("choices", [{}])[0]
+        usage = data.get("usage", {})
+        reasoning = (usage.get("completion_tokens_details") or {}).get("reasoning_tokens")
+        raise RuntimeError(
+            f"OpenAI retornou JSON vazio (modelo={model}, "
+            f"finish={choice.get('finish_reason')}, reasoning_tokens={reasoning})"
+        )
     try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        return {}
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"OpenAI retornou JSON inválido: {raw[:200]}") from exc
+    if not parsed:
+        raise RuntimeError("OpenAI retornou objeto JSON vazio")
+    return parsed
+
+
+def completion_token_budget(model: str, requested: int) -> int:
+    """GPT-5/o-series spend many tokens on reasoning — budget extra headroom."""
+    if uses_max_completion_tokens(model):
+        return min(max(requested * 4, 16000), 32000)
+    return requested
 
 
 def chat_text(

@@ -14,7 +14,7 @@ import Panel from "@/components/ui/Panel";
 import HintBanner from "@/components/ui/HintBanner";
 import { inputClass } from "@/components/ui/inputClass";
 
-const CLIPS_MODELS = ["gpt-5.5", "gpt-4o", "gpt-4o-mini"];
+const CLIPS_MODELS = ["gpt-4o", "gpt-5.5", "gpt-4o-mini"];
 const AUX_MODELS = ["gpt-4o-mini", "gpt-4o", "gpt-5.5"];
 const WHISPER_MODELS = ["whisper-1"];
 
@@ -30,7 +30,7 @@ export default function ConfiguracoesPage() {
   const [apiKey, setApiKey] = useState("");
   const [transcribeEngine, setTranscribeEngine] = useState("openai");
   const [openaiModel, setOpenaiModel] = useState("whisper-1");
-  const [clipsModel, setClipsModel] = useState("gpt-5.5");
+  const [clipsModel, setClipsModel] = useState("gpt-4o");
   const [keywordsModel, setKeywordsModel] = useState("gpt-4o-mini");
   const [enrichModel, setEnrichModel] = useState("gpt-4o-mini");
   const [publicDomain, setPublicDomain] = useState("");
@@ -44,7 +44,7 @@ export default function ConfiguracoesPage() {
       setSettings(s);
       setTranscribeEngine(s.transcribe_engine || "openai");
       setOpenaiModel(s.openai_model || "whisper-1");
-      setClipsModel(s.clips_model || "gpt-5.5");
+      setClipsModel(s.clips_model || "gpt-4o");
       setKeywordsModel(s.keywords_model || "gpt-4o-mini");
       setEnrichModel(s.enrich_model || "gpt-4o-mini");
       setPublicDomain(s.public_domain || "");
@@ -260,7 +260,7 @@ export default function ConfiguracoesPage() {
               <h2 className="text-sm font-semibold text-zinc-200">Modelos de IA</h2>
             </div>
 
-            <Field label="Detecção de cortes" hint="gpt-5.5 — melhor qualidade (recomendado)">
+            <Field label="Detecção de cortes" hint="gpt-4o — recomendado (rápido e estável). gpt-5.5 pode falhar em vídeos longos.">
               <select value={clipsModel} onChange={(e) => setClipsModel(e.target.value)} className={inputClass}>
                 {CLIPS_MODELS.map((m) => (
                   <option key={m} value={m}>
