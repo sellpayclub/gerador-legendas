@@ -204,6 +204,10 @@ class ClipsUpdate(BaseModel):
     clips: list[dict]
 
 
+class SyncEditingRequest(BaseModel):
+    source_clip_id: str
+
+
 class ClipsSettingsUpdate(BaseModel):
     style: dict | None = None
     preset: str | None = None
@@ -493,7 +497,7 @@ def _sync_render_one_clip(
             words_per_line=opts["words_per_line"],
             resolution=opts["resolution"],
             highlight_enabled=opts.get("highlight_enabled", False),
-            overlay_asset=opts.get("overlay_asset"),
+            overlay_asset=clip.get("overlay_asset") or opts.get("overlay_asset"),
             compose_opts=opts.get("compose"),
             on_progress=on_progress,
         )
@@ -1171,6 +1175,31 @@ async def patch_clips_settings(job_id: str, body: ClipsSettingsUpdate) -> dict:
     if not settings:
         raise HTTPException(400, "nenhuma configuração enviada")
     return clips.update_settings(job.job_dir(), settings)
+
+
+@app.post("/api/jobs/{job_id}/clips/sync-editing")
+async def sync_clips_editing_route(job_id: str, body: SyncEditingRequest) -> dict:
+    job = get_job(job_id)
+    if not job:
+        raise HTTPException(404, "job not found")
+    if not job.words_path or not job.words_path.exists():
+        raise HTTPException(400, "transcreva o vídeo primeiro")
+    data = json.loads(job.words_path.read_text(encoding="utf-8"))
+    words = data.get("words", [])
+    lang = job.language if job.language and job.language != "auto" else "auto"
+    try:
+        result = await asyncio.to_thread(
+            clips.sync_editing_to_all_clips,
+            job.job_dir(),
+            body.source_clip_id,
+            words,
+            language=lang,
+        )
+        return {"ok": True, **result}
+    except ValueError as e:
+        raise HTTPException(404, str(e)) from e
+    except Exception as e:
+        raise HTTPException(502, f"Falha ao sincronizar: {e}") from e
 
 
 @app.get("/api/jobs/{job_id}/clips/{clip_id}/words")

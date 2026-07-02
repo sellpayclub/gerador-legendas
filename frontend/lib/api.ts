@@ -54,6 +54,7 @@ export type ClipSegment = {
   error?: string;
   headline?: string;
   caption?: string;
+  overlay_asset?: string | null;
 };
 
 export type ExportFormatId =
@@ -565,6 +566,19 @@ export async function saveClipsSettings(
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(settings),
+    }),
+  );
+}
+
+export async function syncClipsEditing(
+  jobId: string,
+  sourceClipId: string,
+): Promise<{ ok: boolean; synced: number; keywords_synced: number; highlight_enabled: boolean }> {
+  return jsonOrThrow(
+    await fetch(`/api/jobs/${jobId}/clips/sync-editing`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ source_clip_id: sourceClipId }),
     }),
   );
 }

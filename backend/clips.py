@@ -844,6 +844,58 @@ def save_clip_keywords(
     return load_clip_keywords(job_dir, clip_id, words)
 
 
+def sync_editing_to_all_clips(
+    job_dir: Path,
+    source_clip_id: str,
+    global_words: list[dict],
+    *,
+    language: str = "auto",
+) -> dict:
+    """Apply global legend settings and copy highlight workflow from source clip to all others.
+
+    Preserves per-clip headline, caption and overlay_asset.
+    """
+    data = load_clips(job_dir) or {}
+    clip_list = data.get("clips") or []
+    source = next((c for c in clip_list if c.get("id") == source_clip_id), None)
+    if not source:
+        raise ValueError("Corte de origem não encontrado")
+
+    highlight_enabled = bool(data.get("highlight_enabled", False))
+    source_sliced = words_for_render(job_dir, global_words, source)
+    source_kw = load_clip_keywords(job_dir, source_clip_id, source_sliced)
+    source_effects = source_kw.get("effects") or {}
+    source_has_keywords = bool(source_kw.get("indices"))
+
+    synced = 0
+    keywords_synced = 0
+    for clip in clip_list:
+        if not clip.get("enabled", True):
+            continue
+        cid = clip["id"]
+        if cid == source_clip_id:
+            continue
+        sliced = words_for_render(job_dir, global_words, clip)
+        if highlight_enabled and source_has_keywords:
+            detect_clip_keywords(sliced, job_dir, cid, language, force=True)
+            cached = _load_clip_keywords_cache(job_dir, cid) or {}
+            _save_clip_keywords_cache(
+                job_dir,
+                cid,
+                cached.get("indices") or [],
+                manual=bool(cached.get("manual")),
+                effects=source_effects,
+            )
+            keywords_synced += 1
+        synced += 1
+
+    return {
+        "synced": synced,
+        "keywords_synced": keywords_synced,
+        "highlight_enabled": highlight_enabled,
+    }
+
+
 def clip_words_path(job_dir: Path, clip_id: str) -> Path:
     return clip_dir(job_dir, clip_id) / "words.json"
 

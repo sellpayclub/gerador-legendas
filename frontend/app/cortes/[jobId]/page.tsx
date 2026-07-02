@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { ArrowLeft, ArrowRight, ChevronLeft, Loader2, Scissors } from "lucide-react";
+import { ArrowLeft, ArrowRight, ChevronLeft, Copy, Loader2, Scissors } from "lucide-react";
 import VideoPreview from "@/components/VideoPreview";
 import ClipListPanel from "@/components/ClipListPanel";
 import ClipDetectOverlay from "@/components/ClipDetectOverlay";
@@ -36,6 +36,7 @@ import {
   saveClipWords,
   saveClips,
   saveClipsSettings,
+  syncClipsEditing,
   startClipsRender,
   startTranscribe,
   waitForClips,
@@ -146,6 +147,8 @@ export default function CortesPage() {
   const [clipKeywords, setClipKeywords] = useState<number[]>([]);
   const [highlightEnabled, setHighlightEnabled] = useState(false);
   const [step2Tab, setStep2Tab] = useState<Step2Tab>("style");
+  const [syncingEdits, setSyncingEdits] = useState(false);
+  const [syncMessage, setSyncMessage] = useState<string | null>(null);
   const [currentTime, setCurrentTime] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -423,8 +426,8 @@ export default function CortesPage() {
     ...compose,
     headline_text: previewClip?.headline ?? compose.headline_text,
     instagram_caption: previewClip?.caption ?? compose.instagram_caption,
-    overlay_asset: compose.overlay_asset,
-  }), [compose, previewClip?.headline, previewClip?.caption]);
+    overlay_asset: previewClip?.overlay_asset ?? compose.overlay_asset ?? null,
+  }), [compose, previewClip?.headline, previewClip?.caption, previewClip?.overlay_asset]);
 
   /** Seek into clip / first highlight so preview shows destaque immediately. */
   useEffect(() => {
@@ -565,10 +568,20 @@ export default function CortesPage() {
 
   const handleComposeChange = useCallback(
     (patch: Partial<ComposeSettings>) => {
+      if ("overlay_asset" in patch && activeClipId) {
+        persistClips(
+          clipList.map((c) =>
+            c.id === activeClipId
+              ? { ...c, overlay_asset: patch.overlay_asset ?? null }
+              : c,
+          ),
+        );
+        return;
+      }
       setCompose((c) => ({ ...c, ...patch }));
       void persistSettings(patch);
     },
-    [persistSettings],
+    [activeClipId, clipList, persistClips, persistSettings],
   );
 
   const handleVideoPosChange = useCallback(
@@ -586,13 +599,61 @@ export default function CortesPage() {
     [handleComposeChange],
   );
 
-  const validateComposeBeforeRender = useCallback((): string | null => {
-    if (!isComposeFormat(exportFormat)) return null;
-    if (needsOverlay(exportFormat) && !compose.overlay_asset) {
-      return "Este formato exige mídia de overlay — envie na aba Texto.";
+  const validateComposeBeforeRender = useCallback(
+    (clip?: ClipSegment): string | null => {
+      if (!isComposeFormat(exportFormat)) return null;
+      const overlay = clip?.overlay_asset ?? compose.overlay_asset;
+      if (needsOverlay(exportFormat) && !overlay) {
+        return clip
+          ? `O corte "${clip.title.slice(0, 24)}" precisa de mídia de overlay.`
+          : "Este formato exige mídia de overlay — envie na aba Composição.";
+      }
+      return null;
+    },
+    [exportFormat, compose.overlay_asset],
+  );
+
+  const handleSyncEditing = useCallback(async () => {
+    if (!activeClipId) {
+      setError("Selecione um corte como referência.");
+      return;
     }
-    return null;
-  }, [exportFormat, compose.overlay_asset]);
+    setSyncingEdits(true);
+    setSyncMessage(null);
+    setError(null);
+    try {
+      formatCacheRef.current[exportFormat] = snapshotFromState(position, style, compose, videoPos);
+      await persistSettings({ format_presets: { ...formatCacheRef.current } });
+      const r = await syncClipsEditing(jobId, activeClipId);
+      clipWordsCache.current = {};
+      clipKeywordsCache.current = {};
+      const parts = [
+        `Estilo de legenda aplicado a ${r.synced} corte(s).`,
+        "Título e imagem de cada corte continuam individuais.",
+      ];
+      if (r.highlight_enabled && r.keywords_synced > 0) {
+        parts.push(`Destaques detectados em ${r.keywords_synced} corte(s).`);
+      }
+      setSyncMessage(parts.join(" "));
+      if (activeClipId) {
+        const kw = await getClipKeywords(jobId, activeClipId).catch(() => null);
+        if (kw) setClipKeywords(kw.indices ?? []);
+      }
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Falha ao sincronizar");
+    } finally {
+      setSyncingEdits(false);
+    }
+  }, [
+    activeClipId,
+    jobId,
+    exportFormat,
+    position,
+    style,
+    compose,
+    videoPos,
+    persistSettings,
+  ]);
 
   const handleClipTextChange = useCallback(
     (text: string) => {
@@ -713,7 +774,7 @@ export default function CortesPage() {
     }
   };
 
-  const renderBody = () => {
+  const renderBody = (clip?: ClipSegment) => {
     const { aspect: a, template } = formatToBackend(exportFormat);
     return {
       aspect: a,
@@ -723,7 +784,7 @@ export default function CortesPage() {
       words_per_line: wordsPerLine,
       resolution: "1080p" as const,
       highlight_enabled: highlightEnabled,
-      overlay_asset: compose.overlay_asset,
+      overlay_asset: clip?.overlay_asset ?? compose.overlay_asset,
       profile_asset: compose.profile_asset,
       instagram_username: compose.instagram_username,
       logo_asset: compose.logo_asset,
@@ -772,7 +833,8 @@ export default function CortesPage() {
 
   const handleRenderOne = async (clipId: string) => {
     if (renderingIds.has(clipId)) return;
-    const composeErr = validateComposeBeforeRender();
+    const clip = clipList.find((c) => c.id === clipId);
+    const composeErr = validateComposeBeforeRender(clip);
     if (composeErr) {
       setError(composeErr);
       return;
@@ -783,7 +845,7 @@ export default function CortesPage() {
     );
     setError(null);
     try {
-      await renderSingleClip(jobId, clipId, renderBody());
+      await renderSingleClip(jobId, clipId, renderBody(clip));
       pollClips();
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : "Falha ao gerar corte";
@@ -802,15 +864,18 @@ export default function CortesPage() {
   };
 
   const handleRenderAll = async () => {
-    const ids = clipList.filter((c) => c.enabled).map((c) => c.id);
+    const enabled = clipList.filter((c) => c.enabled);
+    const ids = enabled.map((c) => c.id);
     if (!ids.length) {
       setError("Selecione ao menos um corte.");
       return;
     }
-    const composeErr = validateComposeBeforeRender();
-    if (composeErr) {
-      setError(composeErr);
-      return;
+    for (const c of enabled) {
+      const composeErr = validateComposeBeforeRender(c);
+      if (composeErr) {
+        setError(composeErr);
+        return;
+      }
     }
     setRenderingAll(true);
     setError(null);
@@ -1029,7 +1094,7 @@ export default function CortesPage() {
                         <ClipComposePanel
                           jobId={jobId}
                           format={exportFormat}
-                          compose={compose}
+                          compose={previewCompose}
                           onComposeChange={handleComposeChange}
                           clipText={previewClip?.headline ?? ""}
                           onClipTextChange={handleClipTextChange}
@@ -1041,8 +1106,32 @@ export default function CortesPage() {
                     <Section
                       step={isComposeFormat(exportFormat) ? 3 : 2}
                       title="Estilo da legenda"
-                      description="Estilo, destaques e texto por corte"
+                      description="Estilo, destaques e texto — sincronize para todos os cortes"
                     >
+                      <div className="mb-3 flex flex-wrap items-center gap-2 px-1">
+                        <button
+                          type="button"
+                          onClick={() => void handleSyncEditing()}
+                          disabled={syncingEdits || !activeClipId || enabledClips.length < 2}
+                          className="inline-flex items-center gap-2 rounded-lg border border-accent/40 bg-accent/10 px-3 py-2 text-sm font-medium text-accent transition hover:bg-accent/15 disabled:opacity-50"
+                          title="Usa o corte selecionado como referência"
+                        >
+                          {syncingEdits ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : (
+                            <Copy className="h-4 w-4" />
+                          )}
+                          Sincronizar legenda para todos
+                        </button>
+                        <span className="text-xs text-muted">
+                          Título e imagem do topo ficam por corte
+                        </span>
+                      </div>
+                      {syncMessage && (
+                        <p className="mb-3 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-200">
+                          {syncMessage}
+                        </p>
+                      )}
                       <TabBar
                         tabs={[
                           { id: "style" as const, label: "Estilo", shortLabel: "Estilo" },
