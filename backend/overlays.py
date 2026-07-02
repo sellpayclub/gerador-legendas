@@ -111,19 +111,145 @@ class ComposeExtras:
         )
 
 
+def clamp_progress_height_pct(pct: float) -> float:
+    return max(0.02, min(0.12, float(pct)))
+
+
+def headline_box_border(style: str) -> int:
+    return 24 if style == "bold_red" else 8
+
+
+def headline_font_size(size: int | None) -> int:
+    return max(20, min(80, int(size or 42)))
+
+
+def _text_width(draw: ImageDraw.ImageDraw, text: str, font: Any) -> float:
+    try:
+        return float(draw.textlength(text or " ", font=font))
+    except AttributeError:
+        bbox = font.getbbox(text or " ")
+        return float(bbox[2] - bbox[0])
+
+
+def layout_headline_lines(
+    draw: ImageDraw.ImageDraw,
+    text: str,
+    font: Any,
+    max_width_px: int,
+) -> list[str]:
+    """Word-wrap per paragraph; preserve explicit newlines from the user."""
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    lines: list[str] = []
+    for paragraph in normalized.split("\n"):
+        if paragraph == "":
+            lines.append("")
+            continue
+        words = paragraph.split()
+        if not words:
+            lines.append("")
+            continue
+        current = ""
+        for word in words:
+            trial = f"{current} {word}".strip() if current else word
+            if _text_width(draw, trial, font) <= max_width_px or not current:
+                current = trial
+            else:
+                lines.append(current)
+                current = word
+        if current:
+            lines.append(current)
+    return lines if lines else [normalized]
+
+
 def wrap_headline_text(
     text: str,
     canvas_width: int,
     font_size: int,
     width_pct: float = 0.85,
 ) -> str:
-    """Pre-wrap headline for FFmpeg drawtext (approximate chars per line from width %)."""
-    pct = max(0.5, min(1.0, width_pct))
-    max_px = canvas_width * pct
-    char_w = max(6.0, font_size * 0.55)
-    max_chars = max(6, int(max_px / char_w))
-    lines = textwrap.wrap(text, width=max_chars, break_long_words=True, break_on_hyphens=False)
-    return "\n".join(lines) if lines else text
+    """Legacy helper — prefer render_headline_png for export."""
+    if Image is None or ImageDraw is None:
+        pct = max(0.5, min(1.0, width_pct))
+        max_chars = max(6, int(canvas_width * pct / max(6.0, font_size * 0.55)))
+        lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+        out: list[str] = []
+        for para in lines:
+            if not para:
+                out.append("")
+                continue
+            wrapped = textwrap.wrap(para, width=max_chars, break_long_words=False)
+            out.extend(wrapped if wrapped else [para])
+        return "\n".join(out)
+
+    fs = headline_font_size(font_size)
+    font = _load_font(fs, bold=True)
+    scratch = Image.new("RGBA", (1, 1))
+    draw = ImageDraw.Draw(scratch)
+    max_w = int(canvas_width * max(0.5, min(1.0, width_pct)))
+    return "\n".join(layout_headline_lines(draw, text, font, max_w))
+
+
+def render_headline_png(
+    out_path: Path,
+    *,
+    canvas_width: int,
+    extras: ComposeExtras,
+) -> Path:
+    """Render headline as RGBA PNG — pixel-accurate WYSIWYG with preview."""
+    if Image is None or ImageDraw is None:
+        raise RuntimeError("Pillow não instalado — pip install pillow")
+
+    raw_text = (extras.headline_text or "").strip()
+    if not raw_text:
+        raise ValueError("headline vazia")
+
+    style = extras.headline_style or "bold_red"
+    display = raw_text.upper() if style == "bold_red" else raw_text
+    fs = headline_font_size(extras.headline_font_size)
+    border = headline_box_border(style)
+    bg_hex = extras.headline_bg if style == "bold_red" else (extras.headline_bg or "#000000")
+    fg_hex = extras.headline_color or "#FFFFFF"
+    align = extras.headline_align or "center"
+    max_w = int(canvas_width * max(0.5, min(1.0, extras.headline_max_width_pct)))
+
+    font = _load_font(fs, bold=(style == "bold_red"))
+    measure = Image.new("RGBA", (max_w + border * 4, 5000), (0, 0, 0, 0))
+    mdraw = ImageDraw.Draw(measure)
+    lines = layout_headline_lines(mdraw, display, font, max_w)
+
+    line_metrics: list[tuple[int, int]] = []
+    spacing = max(2, fs // 12)
+    for line in lines:
+        label = line if line else " "
+        bbox = mdraw.textbbox((0, 0), label, font=font)
+        line_metrics.append((bbox[2] - bbox[0], bbox[3] - bbox[1]))
+
+    content_w = max_w
+    content_h = sum(h for _, h in line_metrics) + spacing * max(0, len(lines) - 1)
+    total_w = content_w + border * 2
+    total_h = content_h + border * 2
+
+    bg = _hex_to_rgb(bg_hex)
+    fg = _hex_to_rgb(fg_hex)
+    img = Image.new("RGBA", (max(1, total_w), max(1, total_h)), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    draw.rectangle((0, 0, total_w, total_h), fill=(*bg, int(0.92 * 255)))
+
+    y = border
+    for i, line in enumerate(lines):
+        lw, lh = line_metrics[i]
+        if align == "left":
+            x = border
+        elif align == "right":
+            x = total_w - border - lw
+        else:
+            x = border + max(0, (content_w - lw) // 2)
+        draw.text((x, y), line if line else " ", font=font, fill=fg)
+        y += lh + spacing
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    img.save(out_path, "PNG")
+    return out_path
 
 
 def fake_progress(t: float, duration: float, *, fast_until: float = 0.35, fill_at: float = 0.70) -> float:
@@ -149,7 +275,7 @@ def fake_progress_expr(
     fast_until: float = 0.35,
     fill_at: float = 0.70,
 ) -> str:
-    """FFmpeg expression for progress fraction 0..1 given time t."""
+    """FFmpeg expression for progress fraction 0..1 (use with scale/overlay; drawbox has no time t)."""
     d = max(0.001, duration)
     fu = max(0.01, min(0.99, fast_until))
     fa = max(0.01, min(0.99, fill_at))

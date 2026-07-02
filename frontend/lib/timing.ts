@@ -56,3 +56,16 @@ export function lineVisibilityWindow(group: Word[]): { start: number; end: numbe
   const end = group[group.length - 1].end + LINE_END_PAD_S;
   return { start, end: Math.max(start + 0.02, end) };
 }
+
+/** Visibility windows clamped so consecutive lines never overlap (matches backend). */
+export function nonOverlappingLineWindows(groups: Word[][]): { start: number; end: number }[] {
+  return groups.map((group, i) => {
+    let { start, end } = lineVisibilityWindow(group);
+    if (i + 1 < groups.length) {
+      const nextStart = lineVisibilityWindow(groups[i + 1]).start;
+      end = Math.min(end, nextStart - 0.002);
+    }
+    end = Math.max(end, start + 0.01);
+    return { start, end };
+  });
+}

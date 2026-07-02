@@ -18,10 +18,10 @@ from typing import Optional
 
 from dotenv import load_dotenv
 
-load_dotenv()
+from openai_chat import chat_text
+from app_settings import get_keywords_model
 
-OPENAI_CHAT_URL = "https://api.openai.com/v1/chat/completions"
-DEFAULT_MODEL = os.environ.get("KEYWORDS_MODEL", "gpt-4o-mini")
+load_dotenv()
 # Approx. how many words to highlight. 15% feels punchy on short videos and
 # not overwhelming on longer ones. Capped so very long transcripts don't get
 # too busy.
@@ -48,7 +48,7 @@ def save_cache(
     indices: list[int],
     *,
     manual: bool,
-    model: str = DEFAULT_MODEL,
+    model: str = get_keywords_model(),
     effects: dict | None = None,
 ) -> dict:
     payload = {
@@ -79,9 +79,9 @@ def load_keywords(words: list[dict], job_dir: Path) -> dict:
         indices = cached.get("indices") or []
         return _result(
             words, indices, bool(cached.get("manual")),
-            cached.get("model", DEFAULT_MODEL), job_dir,
+            cached.get("model", get_keywords_model()), job_dir,
         )
-    return _result(words, [], False, DEFAULT_MODEL, job_dir)
+    return _result(words, [], False, get_keywords_model(), job_dir)
 
 
 def detect_keywords(words: list[dict], job_dir: Path, language: str = "auto") -> dict:
@@ -93,10 +93,10 @@ def detect_keywords(words: list[dict], job_dir: Path, language: str = "auto") ->
     cached = load_cached(job_dir)
     if cached and cached.get("indices"):
         indices = cached["indices"]
-        return _result(words, indices, bool(cached.get("manual")), cached.get("model", DEFAULT_MODEL), job_dir)
+        return _result(words, indices, bool(cached.get("manual")), cached.get("model", get_keywords_model()), job_dir)
     indices = _call_gpt(words, language)
     save_cache(job_dir, indices, manual=False)
-    return _result(words, indices, False, DEFAULT_MODEL, job_dir)
+    return _result(words, indices, False, get_keywords_model(), job_dir)
 
 
 def _result(words: list[dict], indices: list[int], manual: bool, model: str, job_dir: Path) -> dict:
@@ -180,10 +180,7 @@ def _preview(words: list[dict], indices: list[int]) -> list[str]:
 
 
 def _call_gpt(words: list[dict], language: str) -> list[int]:
-    """Send transcript to GPT-4o-mini and parse the returned indices."""
-    api_key = os.environ.get("OPENAI_API_KEY")
-    if not api_key:
-        raise RuntimeError("OPENAI_API_KEY não configurada em backend/.env")
+    """Send transcript to GPT and parse the returned indices."""
     if not words:
         return []
 
@@ -212,28 +209,12 @@ def _call_gpt(words: list[dict], language: str) -> list[int]:
         "Example: 3,12-13,27"
     )
 
-    import requests
-    resp = requests.post(
-        OPENAI_CHAT_URL,
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
-        json={
-            "model": DEFAULT_MODEL,
-            "temperature": 0.2,
-            "max_tokens": 200,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": transcript},
-            ],
-        },
+    text = chat_text(
+        get_keywords_model(), system, transcript,
+        max_tokens=200,
+        temperature=0.2,
         timeout=60,
     )
-    if resp.status_code != 200:
-        raise RuntimeError(f"OpenAI chat error {resp.status_code}: {resp.text[:400]}")
-    data = resp.json()
-    text = (data.get("choices", [{}])[0].get("message", {}).get("content") or "").strip()
 
     return _parse_indices(text, len(words))
 

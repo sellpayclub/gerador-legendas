@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { listPresets, type StyleConfig } from "@/lib/api";
+import Section from "@/components/ui/Section";
+import { inputClass } from "@/components/ui/inputClass";
 
 type Props = {
   style: StyleConfig;
@@ -43,30 +45,30 @@ export default function StylePicker({
   };
 
   return (
-    <div className="space-y-5">
-      <section>
-        <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-zinc-500">Presets</h3>
+    <div className="space-y-4">
+      <Section title="Presets" description="Estilos prontos — clique para aplicar">
         <div className="grid grid-cols-2 gap-2">
           {presets.map((p) => (
             <button
               key={p.id}
+              type="button"
               onClick={() => applyPreset(p.values)}
-              className="rounded-lg border border-border bg-panel px-3 py-2 text-left text-sm hover:border-accent/50"
+              className="touch-target rounded-lg border border-border bg-panel px-3 py-2.5 text-left text-sm transition hover:border-accent/50"
             >
-              <div className="font-medium">{p.name}</div>
-              <div className="text-[10px] text-zinc-500">Clique para aplicar</div>
+              <div className="font-medium text-zinc-200">{p.name}</div>
+              <div className="text-xs text-muted">Aplicar preset</div>
             </button>
           ))}
         </div>
-      </section>
+      </Section>
 
-      <section className="space-y-3">
-        <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-500">Tipografia</h3>
+      <Section title="Tipografia" collapsible defaultOpen>
+        <div className="space-y-3">
         <Field label="Fonte">
           <select
             value={style.font}
             onChange={(e) => set({ font: e.target.value })}
-            className="input"
+            className={inputClass}
           >
             {FONTS.map((f) => (
               <option key={f} value={f}>{f}</option>
@@ -169,10 +171,11 @@ export default function StylePicker({
             Itálico
           </label>
         </div>
-      </section>
+        </div>
+      </Section>
 
-      <section className="space-y-3">
-        <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-500">Cores</h3>
+      <Section title="Cores" collapsible defaultOpen>
+        <div className="space-y-3">
         <div className="grid grid-cols-3 gap-3">
           <ColorField label="Highlight" value={style.primary_color} onChange={(v) => set({ primary_color: v })} />
           <ColorField label="Base" value={style.secondary_color} onChange={(v) => set({ secondary_color: v })} />
@@ -185,10 +188,11 @@ export default function StylePicker({
             className="w-full"
           />
         </Field>
-      </section>
+        </div>
+      </Section>
 
-      <section className="space-y-3">
-        <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-500">Animação</h3>
+      <Section title="Animação" collapsible defaultOpen={false}>
+        <div className="space-y-3">
         <div className="flex gap-2">
           {(["pop", "fade", "none"] as const).map((a) => (
             <button
@@ -213,10 +217,11 @@ export default function StylePicker({
             />
           </Field>
         )}
-      </section>
+        </div>
+      </Section>
 
-      <section className="space-y-3">
-        <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-500">Caixa de fundo</h3>
+      <Section title="Caixa de fundo" collapsible defaultOpen={false}>
+        <div className="space-y-3">
         <label className="flex items-center gap-2 text-sm">
           <input
             type="checkbox" checked={style.box}
@@ -236,23 +241,8 @@ export default function StylePicker({
             </Field>
           </>
         )}
-      </section>
-
-      <style jsx global>{`
-        .input {
-          width: 100%;
-          background: #0a0a0b;
-          border: 1px solid #26262b;
-          border-radius: 8px;
-          padding: 8px 10px;
-          font-size: 14px;
-          color: #e5e5e7;
-        }
-        .input:focus {
-          outline: none;
-          border-color: #facc15;
-        }
-      `}</style>
+        </div>
+      </Section>
     </div>
   );
 }
@@ -260,7 +250,7 @@ export default function StylePicker({
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <label className="block">
-      <div className="mb-1 text-xs text-zinc-400">{label}</div>
+      <div className="label">{label}</div>
       {children}
     </label>
   );
@@ -269,19 +259,19 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 function ColorField({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
   return (
     <label className="block">
-      <div className="mb-1 text-xs text-zinc-400">{label}</div>
-      <div className="flex items-center gap-2 rounded-lg border border-border bg-bg px-2 py-1">
+      <div className="label">{label}</div>
+      <div className="flex items-center gap-2 rounded-lg border border-border bg-bg px-2 py-1.5">
         <input
           type="color"
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          className="h-7 w-7 cursor-pointer rounded border-0 bg-transparent p-0"
+          className="h-8 w-8 cursor-pointer rounded border-0 bg-transparent p-0"
         />
         <input
           type="text"
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          className="flex-1 bg-transparent text-xs text-zinc-300 outline-none"
+          className="flex-1 bg-transparent text-sm text-zinc-300 outline-none"
         />
       </div>
     </label>

@@ -120,3 +120,18 @@ body {
 ::-webkit-scrollbar-thumb:hover {
   background: #3a3a40;
 }
+
+@layer components {
+  .label {
+    @apply mb-1.5 block text-sm font-medium text-zinc-300;
+  }
+  .hint {
+    @apply text-xs leading-relaxed text-muted;
+  }
+  .touch-target {
+    @apply min-h-[44px];
+  }
+  .pb-safe {
+    padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
+  }
+}

@@ -10,10 +10,10 @@ from typing import Callable, Optional
 from media import ffmpeg_bin, parse_progress
 from overlays import (
     ComposeExtras,
-    escape_drawtext,
+    clamp_progress_height_pct,
     fake_progress_expr,
+    render_headline_png,
     render_instagram_header_png,
-    wrap_headline_text,
 )
 from templates import TemplateDef, resolution_dims
 
@@ -48,54 +48,27 @@ def _is_image(p: Path) -> bool:
     return p.suffix.lower() in _IMAGE_EXTS
 
 
-def _font_file() -> Path | None:
-    for name in ("Roboto-Bold.ttf", "Inter-Bold.ttf", "Roboto-Regular.ttf"):
-        p = FONTS_DIR / name
-        if p.exists():
-            return p
-    return None
-
-
-def _headline_drawtext(extras: ComposeExtras, tpl: TemplateDef) -> str | None:
-    text = (extras.headline_text or "").strip()
-    if not text or not tpl.id.startswith("choquei_"):
-        return None
-    if extras.headline_style == "bold_red":
-        raw = text.upper()
-        bg = extras.headline_bg.lstrip("#")
-        fg = extras.headline_color.lstrip("#")
-        border = 24
-    else:
-        raw = text
-        bg = extras.headline_bg.lstrip("#") if extras.headline_bg else "000000"
-        fg = extras.headline_color.lstrip("#") if extras.headline_color else "FFFFFF"
-        border = 8
-    font = _font_file()
-    if not font:
-        return None
-    fs = max(20, min(80, int(extras.headline_font_size or 42)))
-    display = wrap_headline_text(
-        raw, tpl.width, fs, extras.headline_max_width_pct,
-    )
+def _headline_overlay_expr(extras: ComposeExtras, tpl: TemplateDef) -> tuple[str, str]:
+    """Return (x_expr, y_expr) for centering headline PNG on the template division."""
     y_div = tpl.overlay_region.h
-    y = max(0, y_div - int(fs * 0.9))
-    esc = escape_drawtext(display)
-    font_esc = _escape_filter_path(font.resolve().as_posix())
     align = extras.headline_align or "center"
     if align == "left":
         x_expr = "40"
     elif align == "right":
-        x_expr = "w-text_w-40"
+        x_expr = "W-w-40"
     else:
-        x_expr = "(w-text_w)/2"
-    return (
-        f"drawtext=fontfile='{font_esc}':text='{esc}':fontsize={fs}:"
-        f"fontcolor=0x{fg}:box=1:boxcolor=0x{bg}@0.92:boxborderw={border}:"
-        f"x={x_expr}:y={y}"
-    )
+        x_expr = "(W-w)/2"
+    y_expr = f"{y_div}-h/2"
+    return x_expr, y_expr
 
 
-def _progress_drawbox(extras: ComposeExtras, duration: float) -> str | None:
+def _progress_overlay_chain(
+    extras: ComposeExtras,
+    duration: float,
+    canvas_w: int,
+    canvas_h: int,
+) -> str | None:
+    """Animated progress bar via color+scale+overlay (drawbox has no time variable)."""
     if not extras.progress_enabled:
         return None
     prog = fake_progress_expr(
@@ -103,11 +76,14 @@ def _progress_drawbox(extras: ComposeExtras, duration: float) -> str | None:
         fast_until=extras.progress_fast_until,
         fill_at=extras.progress_fill_at_fast,
     )
-    h_pct = extras.progress_height_pct
+    h_pct = clamp_progress_height_pct(extras.progress_height_pct)
     color = extras.progress_color.lstrip("#")
+    bar_h = max(1, round(canvas_h * h_pct))
+    d = max(0.001, duration)
     return (
-        f"drawbox=x=0:y=ih*(1-{h_pct:.4f}):w='iw*({prog})':h=ih*{h_pct:.4f}:"
-        f"color=0x{color}@1:t=fill"
+        f"color=c=0x{color}@1:s={canvas_w}x{bar_h}:d={d:.3f},format=rgba[cbar];"
+        f"[cbar]scale=eval=frame:w='max(1,trunc(min({canvas_w},{canvas_w}*({prog}))))':"
+        f"h={bar_h}:flags=fast_bilinear[pbar]"
     )
 
 
@@ -118,6 +94,7 @@ def _append_post_ass_extras(
     duration: float,
     logo_input_idx: int | None,
     canvas_w: int,
+    canvas_h: int,
 ) -> tuple[str, str]:
     out = label
     if not extras:
@@ -131,9 +108,9 @@ def _append_post_ass_extras(
         fg += f";[{out}][logo]overlay={lx}:{ly}[lg]"
         out = "lg"
 
-    pb = _progress_drawbox(extras, duration)
+    pb = _progress_overlay_chain(extras, duration, canvas_w, canvas_h)
     if pb:
-        fg += f";[{out}]{pb}[pb]"
+        fg += f";{pb};[{out}][pbar]overlay=x=0:y=H-h[pb]"
         out = "pb"
 
     return fg, out
@@ -153,16 +130,23 @@ def _build_vstack_cmd(
     hw: bool,
     video_pos: tuple[Optional[float], Optional[float]],
     extras: ComposeExtras | None,
+    headline_png: Path | None = None,
 ) -> list[str]:
     cmd: list[str] = [ffmpeg_bin(), "-y", "-i", str(video)]
     next_idx = 1
     logo_input_idx: int | None = None
+    headline_input_idx: int | None = None
 
     if overlay is not None:
         if _is_image(overlay):
             cmd += ["-loop", "1", "-t", f"{duration:.3f}", "-i", str(overlay)]
         else:
             cmd += ["-stream_loop", "-1", "-i", str(overlay)]
+        next_idx += 1
+
+    if headline_png is not None:
+        cmd += ["-loop", "1", "-t", f"{duration:.3f}", "-i", str(headline_png)]
+        headline_input_idx = next_idx
         next_idx += 1
 
     if extras and extras.logo_path and extras.logo_path.exists():
@@ -207,11 +191,13 @@ def _build_vstack_cmd(
     fg += f";[{stacked_label}]scale={tpl.width}:{tpl.height}:flags=lanczos[scaled]"
     canvas_label = "scaled"
 
-    if extras and extras.headline_text and tpl.id.startswith("choquei_"):
-        dt = _headline_drawtext(extras, tpl)
-        if dt:
-            fg += f";[{canvas_label}]{dt}[hl]"
-            canvas_label = "hl"
+    if headline_input_idx is not None and extras and extras.headline_text:
+        x_expr, y_expr = _headline_overlay_expr(extras, tpl)
+        fg += (
+            f";[{canvas_label}][{headline_input_idx}:v]"
+            f"overlay=x='{x_expr}':y='{y_expr}':format=auto[hl]"
+        )
+        canvas_label = "hl"
 
     ass_esc = _escape_filter_path(ass_path.resolve().as_posix())
     if FONTS_DIR.is_dir():
@@ -221,7 +207,7 @@ def _build_vstack_cmd(
         fg += f";[{canvas_label}]ass={ass_esc}[subbed]"
 
     fg, final_label = _append_post_ass_extras(
-        fg, "subbed", extras, duration, logo_input_idx, tpl.width,
+        fg, "subbed", extras, duration, logo_input_idx, tpl.width, tpl.height,
     )
     fg += f";[{final_label}]scale={out_w}:{out_h}:flags=lanczos[vout]"
 
@@ -302,7 +288,7 @@ def _build_header_hstack_cmd(
         fg += f";[{canvas_label}]ass={ass_esc}[subbed]"
 
     fg, final_label = _append_post_ass_extras(
-        fg, "subbed", extras, duration, logo_input_idx, tpl.width,
+        fg, "subbed", extras, duration, logo_input_idx, tpl.width, tpl.height,
     )
     fg += f";[{final_label}]scale={out_w}:{out_h}:flags=lanczos[vout]"
 
@@ -359,14 +345,15 @@ def render_compose(
         pass
 
     header_png: Path | None = None
-    tmp_name: str | None = None
+    headline_png: Path | None = None
+    tmp_files: list[str] = []
 
     if tpl.layout == "header_hstack" and tpl.header_region:
         ig = extras.instagram if extras else None
         tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
-        tmp_name = tmp.name
         tmp.close()
-        header_png = Path(tmp_name)
+        tmp_files.append(tmp.name)
+        header_png = Path(tmp.name)
         prof = profile_path
         if not prof and ig and ig.profile_asset and job_dir:
             prof = job_dir / "assets" / Path(ig.profile_asset).name
@@ -386,6 +373,13 @@ def render_compose(
             caption_size=ig.caption_size if ig else 28,
         )
 
+    if extras and extras.headline_text and tpl.id.startswith("choquei_"):
+        tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+        tmp.close()
+        tmp_files.append(tmp.name)
+        headline_png = Path(tmp.name)
+        render_headline_png(headline_png, canvas_width=tpl.width, extras=extras)
+
     hw = _hw_encoder_available()
 
     if tpl.layout == "header_hstack":
@@ -401,6 +395,7 @@ def render_compose(
         cmd = _build_vstack_cmd(
             video, overlay, ass_path, out_path, tpl, phrases,
             out_w, out_h, fps, duration, hw, video_pos, extras,
+            headline_png=headline_png,
         )
 
     if on_progress:
@@ -424,8 +419,8 @@ def render_compose(
     finally:
         if proc.poll() is None:
             proc.kill()
-        if tmp_name:
+        for p in tmp_files:
             try:
-                Path(tmp_name).unlink(missing_ok=True)
+                Path(p).unlink(missing_ok=True)
             except Exception:
                 pass

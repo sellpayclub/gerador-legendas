@@ -7,7 +7,12 @@ from typing import Iterable
 
 from presets import StyleConfig
 from fonts_util import ass_font_name, ass_reset_style_tags, ass_font_tag
-from timing import group_words_by_pause, line_visibility_window, DEFAULT_PAUSE_THRESHOLD_S
+from timing import (
+    group_words_by_pause,
+    non_overlapping_line_windows,
+    trim_word_ends,
+    DEFAULT_PAUSE_THRESHOLD_S,
+)
 
 _TRANSPARENT = "&HFF000000&"
 
@@ -120,7 +125,7 @@ def _pos_and_anim(cfg: StyleConfig, width: int, height: int) -> str:
             f"\\t({d // 2},{d},\\fscx100\\fscy100)"
         )
     elif cfg.animation == "fade":
-        anim = "\\fad(120,80)"
+        anim = "\\fad(40,30)"
     outline = ""
     ow = max(0, min(24, int(cfg.outline_width)))
     if ow > 0:
@@ -153,8 +158,9 @@ def _build_karaoke_body(
         if not word_text:
             continue
         ws = max(0, int((float(w["start"]) - line_start - KARAOKE_LEAD_S) * 1000))
-        we = max(ws, int((float(w["end"]) - line_start) * 1000))
+        we = max(ws + 1, int((float(w["end"]) - line_start) * 1000))
         sep = _word_sep(cfg, not parts)
+        # Snap primary at ws, snap back to secondary at we — never interpolate (t1=t2).
         parts.append(
             f"{sep}{{\\1c{sec}\\t({ws},{ws},\\1c{pri})"
             f"\\t({we},{we},\\1c{sec})}}{word_text}"
@@ -234,7 +240,7 @@ def generate_ass(
 ) -> None:
     width = int(words_data.get("width", 1920))
     height = int(words_data.get("height", 1080))
-    words = words_data.get("words", [])
+    words = trim_word_ends(words_data.get("words", []))
 
     primary = _hex_to_ass(cfg.primary_color)
     secondary = _hex_to_ass(cfg.secondary_color)
@@ -296,8 +302,9 @@ def generate_ass(
 
     pause_s = pause_threshold_s if pause_threshold_s is not None else DEFAULT_PAUSE_THRESHOLD_S
     groups_list = group_words_by_pause(words, words_per_line, pause_s)
+    line_windows = non_overlapping_line_windows(groups_list)
     for gi, group in enumerate(groups_list):
-        line_start, line_end = line_visibility_window(group)
+        line_start, line_end = line_windows[gi]
         start = line_start
         end = line_end
         t0, t1 = _fmt_time(start), _fmt_time(end)

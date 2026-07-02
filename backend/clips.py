@@ -1,4 +1,4 @@
-"""Auto-detect short-form clips (1–3 min insights) from long transcripts."""
+"""Auto-detect short-form clips (45s–3min insights) from long transcripts."""
 from __future__ import annotations
 
 import json
@@ -11,20 +11,24 @@ from typing import Optional
 from dotenv import load_dotenv
 
 from timing import gap_after
+from openai_chat import chat_json
+from app_settings import get_clips_model
 
 load_dotenv()
 
-OPENAI_CHAT_URL = "https://api.openai.com/v1/chat/completions"
-DEFAULT_MODEL = os.environ.get("CLIPS_MODEL", "gpt-4o-mini")
-
 MIN_CLIP_S = 45.0
-TARGET_MIN_S = 60.0
+TARGET_MIN_S = 45.0
 TARGET_MAX_S = 180.0
+HOOK_MIN_S = 3.0
+HOOK_MAX_S = 25.0
+BODY_MIN_S = 30.0
+BODY_MAX_S = 175.0
 PAUSE_SNAP_S = 0.45
-MAX_CLIPS = 8
+MAX_CLIPS = 24
+MIN_CLIPS_TARGET = 10
 CHUNK_WORDS = 500
 SINGLE_PASS_WORDS = 1500
-MIN_CLIP_SCORE = 0.75
+MIN_CLIP_SCORE = 0.62
 
 
 def _cache_path(job_dir: Path) -> Path:
@@ -53,7 +57,7 @@ def mark_detecting(job_dir: Path) -> None:
     prev = load_clips(job_dir) or {}
     save_clips(job_dir, {
         "clips": prev.get("clips") or [],
-        "model": prev.get("model", DEFAULT_MODEL),
+        "model": prev.get("model", get_clips_model()),
         "manual": prev.get("manual", False),
         "detecting": True,
         "detect_error": None,
@@ -64,11 +68,20 @@ def mark_detect_error(job_dir: Path, message: str) -> None:
     prev = load_clips(job_dir) or {}
     save_clips(job_dir, {
         "clips": prev.get("clips") or [],
-        "model": prev.get("model", DEFAULT_MODEL),
+        "model": prev.get("model", get_clips_model()),
         "manual": prev.get("manual", False),
         "detecting": False,
         "detect_error": message,
     })
+
+
+def clear_detecting(job_dir: Path) -> None:
+    """Clear stale detecting flag (e.g. after server restart mid-job)."""
+    prev = load_clips(job_dir)
+    if not prev or not prev.get("detecting"):
+        return
+    prev["detecting"] = False
+    save_clips(job_dir, prev)
 
 
 def clip_count(job_dir: Path) -> int:
@@ -76,6 +89,12 @@ def clip_count(job_dir: Path) -> int:
     if not data:
         return 0
     return len(data.get("clips") or [])
+
+
+def _clip_target_count(duration: float) -> int:
+    scaled = int(duration / 90)
+    floor = MIN_CLIPS_TARGET if duration >= 900 else int(duration / 120)
+    return max(3, floor, min(MAX_CLIPS, scaled))
 
 
 def slice_words(words: list[dict], t0: float, t1: float) -> list[dict]:
@@ -91,6 +110,58 @@ def slice_words(words: list[dict], t0: float, t1: float) -> list[dict]:
             "start": round(max(0.0, ws - t0), 3),
             "end": round(min(t1 - t0, we - t0), 3),
         })
+    return out
+
+
+def _segment_time_bounds(words: list[dict], i0: int, i1: int) -> tuple[float, float]:
+    i0 = max(0, min(i0, len(words) - 1))
+    i1 = max(i0, min(i1, len(words) - 1))
+    return float(words[i0]["start"]), float(words[i1]["end"])
+
+
+def clip_source_bounds(clip: dict) -> list[dict]:
+    """Source-video time ranges for each segment (hook/body order)."""
+    segments = _export_ordered_segments(clip) if clip.get("segments") else None
+    if segments:
+        return [
+            {
+                "role": s.get("role", "body"),
+                "start_s": float(s["start_s"]),
+                "end_s": float(s["end_s"]),
+            }
+            for s in segments
+        ]
+    return [{
+        "role": "body",
+        "start_s": float(clip["start_s"]),
+        "end_s": float(clip["end_s"]),
+    }]
+
+
+def merge_segment_words(words: list[dict], segments: list[dict]) -> list[dict]:
+    """Merge segment words into a continuous export timeline starting at 0."""
+    out: list[dict] = []
+    offset = 0.0
+    for seg in segments:
+        i0 = int(seg["start_word_idx"])
+        i1 = int(seg["end_word_idx"])
+        src_start, src_end = _segment_time_bounds(words, i0, i1)
+        for i in range(i0, i1 + 1):
+            if i >= len(words):
+                break
+            w = words[i]
+            ws = float(w["start"])
+            we = float(w["end"])
+            if we <= src_start or ws >= src_end:
+                continue
+            rel_start = max(0.0, ws - src_start) + offset
+            rel_end = min(src_end - src_start, we - src_start) + offset
+            out.append({
+                "w": w.get("w", ""),
+                "start": round(rel_start, 3),
+                "end": round(rel_end, 3),
+            })
+        offset += max(0.1, src_end - src_start)
     return out
 
 
@@ -114,6 +185,7 @@ def clip_bounds_from_indices(
         "title": title or f"Corte {i0}–{i1}",
         "hook": hook,
         "score": score,
+        "edit_mode": "linear",
         "start_word_idx": i0,
         "end_word_idx": i1,
         "start_s": round(start_s, 3),
@@ -127,7 +199,6 @@ def clip_bounds_from_indices(
 
 
 def _snap_start_to_pause(words: list[dict], idx: int) -> int:
-    """Move start index earlier to nearest pause before idx."""
     idx = max(0, min(idx, len(words) - 1))
     while idx > 0:
         g = gap_after(words, idx - 1)
@@ -138,7 +209,6 @@ def _snap_start_to_pause(words: list[dict], idx: int) -> int:
 
 
 def _snap_end_to_pause(words: list[dict], idx: int) -> int:
-    """Move end index later to nearest pause after idx."""
     idx = max(0, min(idx, len(words) - 1))
     while idx < len(words) - 1:
         g = gap_after(words, idx)
@@ -146,6 +216,14 @@ def _snap_end_to_pause(words: list[dict], idx: int) -> int:
             break
         idx += 1
     return idx
+
+
+def _normalize_segment_indices(words: list[dict], i0: int, i1: int) -> tuple[int, int]:
+    i0 = max(0, min(i0, len(words) - 1))
+    i1 = max(i0, min(i1, len(words) - 1))
+    i0 = _snap_start_to_pause(words, i0)
+    i1 = _snap_end_to_pause(words, i1)
+    return i0, i1
 
 
 def _expand_to_min_duration(words: list[dict], i0: int, i1: int, min_s: float) -> tuple[int, int]:
@@ -166,58 +244,265 @@ def _shrink_to_max_duration(words: list[dict], i0: int, i1: int, max_s: float) -
     return i0, i1
 
 
+def _build_segments_from_raw(words: list[dict], raw: dict) -> list[dict] | None:
+    """Build normalized segment list from GPT response."""
+    raw_segments = raw.get("segments")
+    edit_mode = str(raw.get("edit_mode") or "").strip()
+
+    if raw_segments and isinstance(raw_segments, list) and len(raw_segments) >= 1:
+        built: list[dict] = []
+        for seg in raw_segments:
+            role = str(seg.get("role") or "body").strip().lower()
+            if role not in ("hook", "body"):
+                role = "body"
+            try:
+                i0 = int(seg.get("start_word_idx", seg.get("start_idx", 0)))
+                i1 = int(seg.get("end_word_idx", seg.get("end_idx", i0)))
+            except (TypeError, ValueError):
+                continue
+            i0, i1 = _normalize_segment_indices(words, i0, i1)
+            src_start, src_end = _segment_time_bounds(words, i0, i1)
+            built.append({
+                "role": role,
+                "start_word_idx": i0,
+                "end_word_idx": i1,
+                "start_s": round(src_start, 3),
+                "end_s": round(src_end, 3),
+                "duration_s": round(src_end - src_start, 3),
+            })
+        if not built:
+            return None
+        has_hook = any(s["role"] == "hook" for s in built)
+        has_body = any(s["role"] == "body" for s in built)
+        if has_hook and has_body:
+            hook_segs = [s for s in built if s["role"] == "hook"]
+            body_segs = [s for s in built if s["role"] == "body"]
+            return hook_segs[:1] + body_segs[:1]
+        if len(built) == 1:
+            return built
+        return built
+
+    if edit_mode == "linear" or raw.get("start_word_idx") is not None:
+        try:
+            i0 = int(raw.get("start_word_idx", raw.get("start_idx", 0)))
+            i1 = int(raw.get("end_word_idx", raw.get("end_idx", i0)))
+        except (TypeError, ValueError):
+            return None
+        i0, i1 = _normalize_segment_indices(words, i0, i1)
+        src_start, src_end = _segment_time_bounds(words, i0, i1)
+        return [{
+            "role": "body",
+            "start_word_idx": i0,
+            "end_word_idx": i1,
+            "start_s": round(src_start, 3),
+            "end_s": round(src_end, 3),
+            "duration_s": round(src_end - src_start, 3),
+        }]
+    return None
+
+
+def _body_indices_from_clip(clip: dict) -> tuple[int, int]:
+    segments = clip.get("segments") or []
+    body = next((s for s in segments if s.get("role") == "body"), None)
+    if body:
+        return int(body["start_word_idx"]), int(body["end_word_idx"])
+    return int(clip.get("start_word_idx", 0)), int(clip.get("end_word_idx", 0))
+
+
+def _segments_overlap(a: tuple[int, int], b: tuple[int, int], tolerance: float = 0.05) -> bool:
+    a0, a1 = a
+    b0, b1 = b
+    span_a = max(1, a1 - a0)
+    span_b = max(1, b1 - b0)
+    overlap_start = max(a0, b0)
+    overlap_end = min(a1, b1)
+    if overlap_end < overlap_start:
+        return False
+    overlap = overlap_end - overlap_start + 1
+    return overlap / span_a >= (1.0 - tolerance) and overlap / span_b >= (1.0 - tolerance)
+
+
+def _dedupe_similar_clips(clips: list[dict]) -> list[dict]:
+    if not clips:
+        return []
+    sorted_clips = sorted(clips, key=lambda c: -float(c.get("score") or 0))
+    kept: list[dict] = []
+    for c in sorted_clips:
+        body_idx = _body_indices_from_clip(c)
+        duplicate = False
+        for k in kept:
+            k_body = _body_indices_from_clip(k)
+            if _segments_overlap(body_idx, k_body):
+                hook_a = (c.get("hook_text") or c.get("hook") or c.get("title") or "").strip().lower()
+                hook_b = (k.get("hook_text") or k.get("hook") or k.get("title") or "").strip().lower()
+                if hook_a == hook_b or (c.get("title") or "").strip().lower() == (k.get("title") or "").strip().lower():
+                    duplicate = True
+                    break
+        if not duplicate:
+            kept.append(c)
+    def _sort_key(c: dict) -> float:
+        segs = c.get("segments") or []
+        body = next((s for s in segs if s.get("role") == "body"), segs[0] if segs else None)
+        if body:
+            return float(body.get("start_s", c.get("start_s", 0)))
+        return float(c.get("start_s", 0))
+
+    kept.sort(key=_sort_key)
+    return kept[:MAX_CLIPS]
+
+
+def _finalize_clip_from_segments(
+    words: list[dict],
+    segments: list[dict],
+    *,
+    title: str,
+    hook_text: str,
+    insight: str,
+    score: float,
+    edit_mode: str,
+    coherence_note: str = "",
+) -> dict | None:
+    if not segments:
+        return None
+
+    export_dur = sum(float(s["duration_s"]) for s in segments)
+    if export_dur < MIN_CLIP_S or export_dur > TARGET_MAX_S:
+        return None
+
+    if edit_mode == "hook_then_body":
+        hook_seg = next((s for s in segments if s["role"] == "hook"), None)
+        body_seg = next((s for s in segments if s["role"] == "body"), None)
+        if not hook_seg or not body_seg:
+            return None
+        if not (HOOK_MIN_S <= float(hook_seg["duration_s"]) <= HOOK_MAX_S):
+            return None
+        body_dur = float(body_seg["duration_s"])
+        if body_dur < TARGET_MIN_S or body_dur > BODY_MAX_S:
+            return None
+
+    body_seg = next((s for s in segments if s["role"] == "body"), segments[-1])
+    i0 = int(body_seg["start_word_idx"])
+    i1 = int(body_seg["end_word_idx"])
+
+    text_parts = []
+    for seg in segments:
+        si0 = int(seg["start_word_idx"])
+        si1 = int(seg["end_word_idx"])
+        text_parts.append(
+            " ".join((words[i].get("w") or "").strip() for i in range(si0, si1 + 1)).strip()
+        )
+    preview_text = " ".join(p for p in text_parts if p).strip()
+
+    clip = {
+        "id": f"clip_{uuid.uuid4().hex[:8]}",
+        "title": title or "Corte",
+        "hook": hook_text or insight,
+        "hook_text": hook_text or "",
+        "insight": insight or hook_text,
+        "score": score,
+        "edit_mode": edit_mode,
+        "segments": segments,
+        "start_word_idx": i0,
+        "end_word_idx": i1,
+        "preview": preview_text[:120] + ("…" if len(preview_text) > 120 else ""),
+        "enabled": True,
+        "status": "pending",
+    }
+    if coherence_note:
+        clip["coherence_note"] = coherence_note
+    clip["start_s"] = 0.0
+    clip["end_s"] = round(export_dur, 3)
+    clip["duration_s"] = round(export_dur, 3)
+    return clip
+
+
 def _normalize_clip(words: list[dict], raw: dict) -> dict | None:
-    try:
-        i0 = int(raw.get("start_word_idx", raw.get("start_idx", 0)))
-        i1 = int(raw.get("end_word_idx", raw.get("end_idx", i0)))
-    except (TypeError, ValueError):
-        return None
     if not words:
-        return None
-    i0 = max(0, min(i0, len(words) - 1))
-    i1 = max(i0, min(i1, len(words) - 1))
-
-    i0 = _snap_start_to_pause(words, i0)
-    i1 = _snap_end_to_pause(words, i1)
-    i0, i1 = _expand_to_min_duration(words, i0, i1, TARGET_MIN_S)
-    i0, i1 = _shrink_to_max_duration(words, i0, i1, TARGET_MAX_S)
-
-    dur = float(words[i1]["end"]) - float(words[i0]["start"])
-    if dur < MIN_CLIP_S:
         return None
 
     score = float(raw.get("score") or 0.5) if raw.get("score") is not None else 0.5
     if score < MIN_CLIP_SCORE:
         return None
 
-    hook = str(raw.get("hook") or raw.get("reason") or "").strip()
-    insight = str(raw.get("insight") or hook).strip()
-    clip = clip_bounds_from_indices(
-        words, i0, i1,
-        title=str(raw.get("title") or "Corte").strip(),
-        hook=hook or insight,
+    hook_text = str(raw.get("hook_text") or raw.get("hook") or raw.get("reason") or "").strip()
+    insight = str(raw.get("insight") or hook_text).strip()
+    title = str(raw.get("title") or "Corte").strip()
+    coherence_note = str(raw.get("coherence_note") or "").strip()
+
+    segments = _build_segments_from_raw(words, raw)
+
+    if segments and len(segments) >= 2 and any(s["role"] == "hook" for s in segments):
+        return _finalize_clip_from_segments(
+            words, segments,
+            title=title,
+            hook_text=hook_text,
+            insight=insight,
+            score=score,
+            edit_mode="hook_then_body",
+            coherence_note=coherence_note,
+        )
+
+    if segments and len(segments) == 1:
+        seg = segments[0]
+        i0, i1 = int(seg["start_word_idx"]), int(seg["end_word_idx"])
+        i0, i1 = _expand_to_min_duration(words, i0, i1, MIN_CLIP_S)
+        i0, i1 = _shrink_to_max_duration(words, i0, i1, TARGET_MAX_S)
+        dur = float(words[i1]["end"]) - float(words[i0]["start"])
+        if dur < MIN_CLIP_S:
+            return None
+        seg = {
+            **seg,
+            "start_word_idx": i0,
+            "end_word_idx": i1,
+            "start_s": round(float(words[i0]["start"]), 3),
+            "end_s": round(float(words[i1]["end"]), 3),
+            "duration_s": round(dur, 3),
+        }
+        return _finalize_clip_from_segments(
+            words, [seg],
+            title=title,
+            hook_text=hook_text,
+            insight=insight,
+            score=score,
+            edit_mode="linear",
+            coherence_note=coherence_note,
+        )
+
+    try:
+        i0 = int(raw.get("start_word_idx", raw.get("start_idx", 0)))
+        i1 = int(raw.get("end_word_idx", raw.get("end_idx", i0)))
+    except (TypeError, ValueError):
+        return None
+
+    i0 = max(0, min(i0, len(words) - 1))
+    i1 = max(i0, min(i1, len(words) - 1))
+    i0 = _snap_start_to_pause(words, i0)
+    i1 = _snap_end_to_pause(words, i1)
+    i0, i1 = _expand_to_min_duration(words, i0, i1, MIN_CLIP_S)
+    i0, i1 = _shrink_to_max_duration(words, i0, i1, TARGET_MAX_S)
+
+    dur = float(words[i1]["end"]) - float(words[i0]["start"])
+    if dur < MIN_CLIP_S:
+        return None
+
+    src_start, src_end = _segment_time_bounds(words, i0, i1)
+    seg = {
+        "role": "body",
+        "start_word_idx": i0,
+        "end_word_idx": i1,
+        "start_s": round(src_start, 3),
+        "end_s": round(src_end, 3),
+        "duration_s": round(dur, 3),
+    }
+    return _finalize_clip_from_segments(
+        words, [seg],
+        title=title,
+        hook_text=hook_text,
+        insight=insight,
         score=score,
+        edit_mode="linear",
+        coherence_note=coherence_note,
     )
-    if insight:
-        clip["insight"] = insight
-    return clip
-
-
-def _remove_overlaps(clips: list[dict]) -> list[dict]:
-    if not clips:
-        return []
-    sorted_clips = sorted(clips, key=lambda c: (-float(c.get("score") or 0), c["start_s"]))
-    kept: list[dict] = []
-    for c in sorted_clips:
-        overlap = False
-        for k in kept:
-            if c["start_s"] < k["end_s"] and c["end_s"] > k["start_s"]:
-                overlap = True
-                break
-        if not overlap:
-            kept.append(c)
-    kept.sort(key=lambda c: c["start_s"])
-    return kept[:MAX_CLIPS]
 
 
 def _transcript_blocks(words: list[dict], block_size: int = CHUNK_WORDS) -> list[str]:
@@ -230,70 +515,62 @@ def _transcript_blocks(words: list[dict], block_size: int = CHUNK_WORDS) -> list
 
 
 def _openai_json(system: str, user: str, *, max_tokens: int = 2500) -> dict:
-    api_key = os.environ.get("OPENAI_API_KEY")
-    if not api_key:
-        raise RuntimeError("OPENAI_API_KEY não configurada em backend/.env")
-
-    import requests
-    resp = requests.post(
-        OPENAI_CHAT_URL,
-        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-        json={
-            "model": DEFAULT_MODEL,
-            "temperature": 0.3,
-            "max_tokens": max_tokens,
-            "response_format": {"type": "json_object"},
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-        },
-        timeout=180,
+    return chat_json(
+        get_clips_model(), system, user,
+        max_tokens=max_tokens,
+        temperature=0.5,
+        timeout=300,
     )
-    if resp.status_code != 200:
-        raise RuntimeError(f"OpenAI chat error {resp.status_code}: {resp.text[:400]}")
-    raw = resp.json().get("choices", [{}])[0].get("message", {}).get("content") or "{}"
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        return {}
 
 
 def _clip_selection_system(lang_hint: str, target: int, duration: float, word_count: int) -> str:
     return (
-        "You are a senior short-form video editor (Reels/TikTok/Shorts)." + lang_hint +
-        f"\n\nFrom a long video transcript ({duration:.0f}s, {word_count} words), "
-        f"select exactly the best {target} clips (60–180 seconds each).\n\n"
-        "Each clip MUST have a clear narrative arc:\n"
-        "1. INÍCIO (hook): question, bold claim, or minimal context that grabs attention\n"
-        "2. MEIO (development): argument, example, story, or explanation\n"
-        "3. FIM (payoff): actionable insight, conclusion, punchline, or takeaway\n\n"
-        "REJECT clips that are:\n"
-        "- Generic intros/outros, 'thanks for watching', filler transitions\n"
-        "- Mid-thought without setup or payoff\n"
-        "- Lacking a specific, valuable insight the viewer can use\n\n"
-        "Each clip must be self-contained (viewer understands without the full video).\n"
-        "Do NOT cut mid-sentence. Include minimal setup if the payoff needs it.\n"
-        "Pick ONLY the highest-value moments — do NOT span the entire video.\n\n"
-        "Return JSON:\n"
-        '{"clips":[{"title":"short title","hook":"opening hook in one line",'
-        '"insight":"the valuable takeaway in one sentence",'
-        '"start_word_idx":120,"end_word_idx":340,"score":0.92}]}\n'
-        "Use 0-based word indices from the FULL transcript. "
-        "score 0–1 (only include clips with score >= 0.75). Clips must not overlap."
+        "Você é um editor sênior de vídeos curtos (Reels/TikTok/Shorts), especialista em transformar "
+        "vídeos longos em dezenas de cortes virais." + lang_hint +
+        f"\n\nAnalise a transcrição completa ({duration:.0f}s, {word_count} palavras) e selecione "
+        f"**pelo menos {target} cortes** de alto valor (meta: 1 corte a cada 2–3 min de conteúdo falado).\n\n"
+        "## Prioridade #1: GANCHO irresistível\n"
+        "O gancho é a frase mais chamativa do corte — pergunta provocativa, afirmação forte, número chocante, "
+        "punchline ou revelação. Pode vir de **qualquer minuto** do vídeo.\n\n"
+        "## Estratégia de edição profissional (cold open)\n"
+        "Quando o gancho NÃO está no início natural do trecho, use `edit_mode: hook_then_body`:\n"
+        "1. **hook** (3–25s): a frase mais impactante, mesmo que esteja em outro ponto do vídeo\n"
+        "2. **body** (até ~3 min): trecho cronológico completo onde a ideia nasce, se desenvolve e FECHA "
+        "(setup → desenvolvimento → payoff). Não corte antes da conclusão.\n\n"
+        "Use `edit_mode: linear` só quando o gancho já está naturalmente no início do trecho.\n\n"
+        "## Requisitos de cada corte\n"
+        "- Duração total exportada (hook + body): **45–180 segundos**\n"
+        "- Autocontido: viewer entende sem ver o vídeo inteiro\n"
+        "- Gancho e corpo sobre a **mesma ideia** (rejeite clickbait desconectado)\n"
+        "- **Diversidade temática**: insights diferentes, não variações do mesmo minuto\n"
+        "- NÃO inclua intros genéricos, 'obrigado por assistir', transições vazias\n\n"
+        "## Sobreposição\n"
+        "Cortes PODEM reutilizar trechos do vídeo se o gancho ou ângulo editorial for diferente. "
+        "Priorize volume + qualidade, não exclusividade de timeline.\n\n"
+        "Retorne JSON:\n"
+        '{"clips":[{"title":"título curto","hook_text":"frase do gancho","insight":"takeaway em 1 frase",'
+        '"edit_mode":"hook_then_body","coherence_note":"por que gancho e corpo são a mesma ideia",'
+        '"score":0.88,"segments":[{"role":"hook","start_word_idx":4200,"end_word_idx":4250},'
+        '{"role":"body","start_word_idx":1800,"end_word_idx":2400}]}]}\n\n'
+        "Para cortes lineares simples, use edit_mode linear com start_word_idx/end_word_idx ou "
+        'segments com role body.\n'
+        "Use índices 0-based da transcrição COMPLETA. score 0–1 (inclua apenas >= 0.62)."
     )
 
 
 def _summarize_block_system(lang_hint: str) -> str:
     return (
-        "You analyze transcript segments for short-form video editing." + lang_hint +
-        "\n\nFor each segment, identify 0–2 candidate clip ranges with strong insights.\n"
-        "Each candidate needs hook + development + payoff potential.\n\n"
-        "Return JSON:\n"
-        '{"candidates":[{"title":"...","insight":"valuable takeaway",'
-        '"start_word_idx":120,"end_word_idx":340,"score":0.85,"themes":"brief theme"}]}\n'
-        "Use the global word indices shown in the transcript. "
-        "Skip generic filler. score >= 0.75 only."
+        "Você analisa segmentos de transcrição para edição de vídeos curtos profissionais." + lang_hint +
+        "\n\nPara cada bloco, identifique **1–4 candidatos** a cortes com insights fortes.\n"
+        "Para cada candidato:\n"
+        "- Sugira gancho impactante (pode ser cold open de outra parte do vídeo se houver frase forte aqui)\n"
+        "- Indique corpo com arco completo (setup → payoff)\n\n"
+        "Retorne JSON:\n"
+        '{"candidates":[{"title":"...","hook_text":"frase do gancho","insight":"takeaway",'
+        '"edit_mode":"hook_then_body","score":0.85,"themes":"tema breve",'
+        '"segments":[{"role":"hook","start_word_idx":120,"end_word_idx":140},'
+        '{"role":"body","start_word_idx":100,"end_word_idx":400}]}]}\n'
+        "Use os índices globais mostrados na transcrição. Pule filler genérico. score >= 0.62."
     )
 
 
@@ -305,48 +582,53 @@ def _transcript_full(words: list[dict]) -> str:
 def _call_gpt_clips(words: list[dict], duration: float, language: str) -> list[dict]:
     lang_hint = ""
     if language and language != "auto":
-        lang_hint = f" The spoken language is {language}."
+        lang_hint = f" O idioma falado é {language}."
     else:
-        lang_hint = " Detect the language from the transcript."
+        lang_hint = " Detecte o idioma pela transcrição."
 
-    target = max(2, min(MAX_CLIPS, int(duration / 180) + 1))
+    target = _clip_target_count(duration)
     all_raw: list[dict] = []
 
     if len(words) <= SINGLE_PASS_WORDS:
         system = _clip_selection_system(lang_hint, target, duration, len(words))
-        data = _openai_json(system, _transcript_full(words), max_tokens=4000)
+        data = _openai_json(system, _transcript_full(words), max_tokens=6000)
         all_raw.extend(data.get("clips") or [])
     else:
-        # Pass 1: summarize each block and collect candidates
         candidates: list[dict] = []
         blocks = _transcript_blocks(words)
         sum_system = _summarize_block_system(lang_hint)
-        for block in blocks:
-            data = _openai_json(sum_system, block, max_tokens=2000)
+        for i, block in enumerate(blocks, 1):
+            print(f"[clips] Analisando bloco {i}/{len(blocks)}...", flush=True)
+            data = _openai_json(sum_system, block, max_tokens=2500)
             candidates.extend(data.get("candidates") or data.get("clips") or [])
 
-        # Pass 2: pick best clips from consolidated candidates
         if candidates:
             cand_lines = []
             for c in candidates:
+                segs = c.get("segments") or []
+                seg_desc = ", ".join(
+                    f"{s.get('role')}:{s.get('start_word_idx')}-{s.get('end_word_idx')}"
+                    for s in segs
+                ) if segs else f"{c.get('start_word_idx')}–{c.get('end_word_idx')}"
                 cand_lines.append(
-                    f"- idx {c.get('start_word_idx')}–{c.get('end_word_idx')}: "
-                    f"score={c.get('score', 0)} title={c.get('title', '')} "
-                    f"insight={c.get('insight', c.get('hook', ''))}"
+                    f"- {seg_desc}: score={c.get('score', 0)} "
+                    f"title={c.get('title', '')} hook={c.get('hook_text', c.get('hook', ''))} "
+                    f"insight={c.get('insight', '')}"
                 )
             pick_system = _clip_selection_system(lang_hint, target, duration, len(words))
             pick_user = (
-                f"Video has {len(words)} words ({duration:.0f}s).\n"
-                f"Pre-analyzed candidates:\n" + "\n".join(cand_lines) +
-                "\n\nFull transcript (word_idx:word@time):\n" + _transcript_full(words)
+                f"Vídeo com {len(words)} palavras ({duration:.0f}s). Meta: {target} cortes.\n"
+                f"Candidatos pré-analisados:\n" + "\n".join(cand_lines) +
+                "\n\nTranscrição completa (word_idx:palavra@tempo):\n" + _transcript_full(words)
             )
-            data = _openai_json(pick_system, pick_user, max_tokens=4000)
+            print(f"[clips] Selecionando melhores cortes entre {len(candidates)} candidatos...", flush=True)
+            data = _openai_json(pick_system, pick_user, max_tokens=6000)
             all_raw.extend(data.get("clips") or [])
         else:
             blocks = _transcript_blocks(words)
             system = _clip_selection_system(lang_hint, target, duration, len(words))
             for block in blocks:
-                data = _openai_json(system, block, max_tokens=2500)
+                data = _openai_json(system, block, max_tokens=3000)
                 all_raw.extend(data.get("clips") or [])
 
     normalized: list[dict] = []
@@ -355,7 +637,7 @@ def _call_gpt_clips(words: list[dict], duration: float, language: str) -> list[d
         if clip:
             normalized.append(clip)
 
-    return _remove_overlaps(normalized)
+    return _dedupe_similar_clips(normalized)
 
 
 def detect_clips(
@@ -374,7 +656,7 @@ def detect_clips(
     if not words:
         prev = load_clips(job_dir) or {}
         payload = _merge_settings(prev)
-        payload.update({"clips": [], "model": DEFAULT_MODEL, "manual": False})
+        payload.update({"clips": [], "model": get_clips_model(), "manual": False})
         return save_clips(job_dir, payload)
 
     detected = _call_gpt_clips(words, duration, language)
@@ -382,7 +664,7 @@ def detect_clips(
     payload = _merge_settings(prev)
     payload.update({
         "clips": detected,
-        "model": DEFAULT_MODEL,
+        "model": get_clips_model(),
         "manual": False,
         "detecting": False,
         "detect_error": None,
@@ -403,14 +685,13 @@ def update_clips(job_dir: Path, clips: list[dict], *, manual: bool = True) -> di
     payload = _merge_settings(prev)
     payload.update({
         "clips": out,
-        "model": prev.get("model", DEFAULT_MODEL),
+        "model": prev.get("model", get_clips_model()),
         "manual": manual,
     })
     return save_clips(job_dir, payload)
 
 
 def _merge_settings(prev: dict) -> dict:
-    """Preserve style/settings fields when updating clips list."""
     keys = (
         "style", "preset", "words_per_line", "aspect", "template", "resolution",
         "highlight_enabled", "overlay_asset", "profile_asset", "instagram_username",
@@ -419,7 +700,7 @@ def _merge_settings(prev: dict) -> dict:
         "headline_color", "headline_font_size", "headline_align", "headline_max_width_pct",
         "overlay_pos_x",
         "overlay_pos_y", "video_pos_x", "video_pos_y", "ig_bg_color", "ig_text_color",
-        "ig_avatar_size", "ig_username_size", "ig_caption_size",
+        "ig_avatar_size", "ig_username_size", "ig_caption_size", "format_presets",
     )
     return {k: prev[k] for k in keys if k in prev}
 
@@ -434,7 +715,7 @@ def update_settings(job_dir: Path, settings: dict) -> dict:
         "headline_color", "headline_font_size", "headline_align", "headline_max_width_pct",
         "overlay_pos_x",
         "overlay_pos_y", "video_pos_x", "video_pos_y", "ig_bg_color", "ig_text_color",
-        "ig_avatar_size", "ig_username_size", "ig_caption_size",
+        "ig_avatar_size", "ig_username_size", "ig_caption_size", "format_presets",
     )
     for k in allowed:
         if k in settings:
@@ -471,7 +752,7 @@ def _save_clip_keywords_cache(
     payload = {
         "indices": indices,
         "manual": manual,
-        "model": prev.get("model", kw_mod.DEFAULT_MODEL),
+        "model": prev.get("model", kw_mod.get_keywords_model()),
         "effects": effects if effects is not None else prev.get("effects") or {},
         "ts": time.time(),
     }
@@ -543,11 +824,31 @@ def save_clip_words(job_dir: Path, clip_id: str, words: list[dict]) -> list[dict
     return words
 
 
+def _export_ordered_segments(clip: dict) -> list[dict]:
+    segments = clip.get("segments") or []
+    if clip.get("edit_mode") == "hook_then_body":
+        ordered: list[dict] = []
+        for role in ("hook", "body"):
+            for seg in segments:
+                if seg.get("role") == role:
+                    ordered.append(seg)
+                    break
+        if ordered:
+            return ordered
+    return segments
+
+
 def words_for_render(job_dir: Path, global_words: list[dict], clip: dict) -> list[dict]:
-    """Clip-specific words if saved, else slice from global transcript."""
+    """Clip-specific words if saved, else build export timeline from segments."""
     override = load_clip_words(job_dir, clip["id"])
     if override:
         return override
+    segments = _export_ordered_segments(clip)
+    if segments:
+        if len(segments) > 1 or clip.get("edit_mode") == "hook_then_body":
+            return merge_segment_words(global_words, segments)
+        seg = segments[0]
+        return slice_words(global_words, float(seg["start_s"]), float(seg["end_s"]))
     return slice_words(global_words, float(clip["start_s"]), float(clip["end_s"]))
 
 

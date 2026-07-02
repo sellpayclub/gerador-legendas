@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { ChevronDown, ChevronUp, Loader2, Play, Sparkles, Trash2 } from "lucide-react";
 import type { ClipSegment } from "@/lib/api";
+import IconButton from "@/components/ui/IconButton";
 
 type Props = {
   clips: ClipSegment[];
@@ -41,19 +42,19 @@ export default function ClipListPanel({
         <div>
           <h3 className="text-sm font-semibold text-zinc-100">Cortes sugeridos</h3>
           <p className="mt-0.5 text-xs text-zinc-500">
-            Trechos com hook, insight e conclusão — ajuste início/fim se precisar
+            Marque os cortes · clique em «Ajustar corte» no fim da lista se quiser editar
           </p>
         </div>
         <button
           type="button"
           onClick={onDetect}
           disabled={detecting}
-          className="flex shrink-0 items-center gap-1 rounded-md bg-accent/10 px-2 py-1.5 text-xs text-accent hover:bg-accent/20 disabled:opacity-50"
+          className="touch-target flex shrink-0 items-center gap-2 rounded-lg bg-accent/10 px-3 py-2 text-sm font-medium text-accent transition hover:bg-accent/20 disabled:opacity-50"
         >
           {detecting ? (
-            <Loader2 className="h-3 w-3 animate-spin" />
+            <Loader2 className="h-4 w-4 animate-spin" />
           ) : (
-            <Sparkles className="h-3 w-3" />
+            <Sparkles className="h-4 w-4" />
           )}
           {detecting ? "Detectando..." : "Detectar com IA"}
         </button>
@@ -90,19 +91,39 @@ export default function ClipListPanel({
                   onClick={() => onSelect(clip.id)}
                   className="min-w-0 flex-1 text-left"
                 >
-                  <div className="text-sm font-medium text-zinc-100">{clip.title}</div>
-                  {(clip.insight || clip.hook) && (
+                  <div className="flex flex-wrap items-center gap-2">
+                    <div className="text-sm font-medium text-zinc-100">{clip.title}</div>
+                    {clip.edit_mode === "hook_then_body" && (
+                      <span className="rounded bg-accent/15 px-1.5 py-0.5 text-[10px] font-medium text-accent">
+                        Gancho imediato
+                      </span>
+                    )}
+                  </div>
+                  {(clip.hook_text || clip.insight || clip.hook) && (
                     <div className="mt-0.5 line-clamp-2 text-xs text-zinc-500">
-                      {clip.insight || clip.hook}
+                      {clip.hook_text || clip.insight || clip.hook}
                     </div>
                   )}
                   <div className="mt-1 flex flex-wrap gap-2 text-[10px] text-zinc-500">
                     <span>{fmtDuration(clip.duration_s)}</span>
-                    <span>·</span>
-                    <span>
-                      {clip.start_s.toFixed(0)}s – {clip.end_s.toFixed(0)}s
-                    </span>
-                    {clip.score != null && clip.score >= 0.75 && (
+                    {clip.edit_mode === "hook_then_body" && clip.segments?.length ? (
+                      <>
+                        <span>·</span>
+                        <span>
+                          gancho {clip.segments.find((s) => s.role === "hook")?.start_s.toFixed(0)}s
+                          {" → "}
+                          corpo {clip.segments.find((s) => s.role === "body")?.start_s.toFixed(0)}s
+                        </span>
+                      </>
+                    ) : (
+                      <>
+                        <span>·</span>
+                        <span>
+                          {clip.start_s.toFixed(0)}s – {clip.end_s.toFixed(0)}s
+                        </span>
+                      </>
+                    )}
+                    {clip.score != null && clip.score >= 0.62 && (
                       <>
                         <span>·</span>
                         <span className="text-accent">{(clip.score * 100).toFixed(0)}%</span>
@@ -110,41 +131,42 @@ export default function ClipListPanel({
                     )}
                   </div>
                 </button>
-                <div className="flex shrink-0 flex-col gap-1">
-                  <button
+                <div className="flex shrink-0 flex-col gap-0.5">
+                  <IconButton
                     type="button"
                     onClick={() => onReorder(clip.id, "up")}
                     disabled={idx === 0}
                     title="Mover para cima"
-                    className="rounded p-0.5 text-zinc-500 hover:bg-border/50 hover:text-zinc-100 disabled:opacity-30"
+                    size="sm"
                   >
-                    <ChevronUp className="h-3.5 w-3.5" />
-                  </button>
-                  <button
+                    <ChevronUp className="h-4 w-4" />
+                  </IconButton>
+                  <IconButton
                     type="button"
                     onClick={() => onReorder(clip.id, "down")}
                     disabled={idx === clips.length - 1}
                     title="Mover para baixo"
-                    className="rounded p-0.5 text-zinc-500 hover:bg-border/50 hover:text-zinc-100 disabled:opacity-30"
+                    size="sm"
                   >
-                    <ChevronDown className="h-3.5 w-3.5" />
-                  </button>
-                  <button
+                    <ChevronDown className="h-4 w-4" />
+                  </IconButton>
+                  <IconButton
                     type="button"
                     onClick={() => onPreview(clip)}
                     title="Ouvir trecho"
-                    className="rounded p-1 text-zinc-400 hover:bg-border/50 hover:text-zinc-100"
+                    size="sm"
                   >
-                    <Play className="h-3.5 w-3.5" />
-                  </button>
-                  <button
+                    <Play className="h-4 w-4" />
+                  </IconButton>
+                  <IconButton
                     type="button"
+                    variant="danger"
                     onClick={() => onRemove(clip.id)}
                     title="Remover corte"
-                    className="rounded p-1 text-zinc-500 hover:bg-red-500/10 hover:text-red-400"
+                    size="sm"
                   >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </button>
+                    <Trash2 className="h-4 w-4" />
+                  </IconButton>
                 </div>
               </div>
             </li>

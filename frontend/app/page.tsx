@@ -1,9 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Upload, Loader2, Film, Trash2, Scissors, Type } from "lucide-react";
+import { Upload, Loader2, Film, Trash2, Scissors, Type, Settings } from "lucide-react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { uploadVideo, deleteJob, type JobState } from "@/lib/api";
+import { uploadVideo, deleteJob, getHealth, type JobState } from "@/lib/api";
+import Field from "@/components/ui/Field";
+import IconButton from "@/components/ui/IconButton";
+import { inputClass } from "@/components/ui/inputClass";
 
 const ACCEPTED = [".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v"];
 
@@ -30,6 +34,7 @@ export default function HomePage() {
   const [language, setLanguage] = useState("auto");
   const [mode, setMode] = useState<AppMode>("legendas");
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [needsConfig, setNeedsConfig] = useState(false);
   const languageRef = useRef("auto");
   const modeRef = useRef<AppMode>("legendas");
   languageRef.current = language;
@@ -48,6 +53,12 @@ export default function HomePage() {
   useEffect(() => {
     loadJobs();
   }, [loadJobs]);
+
+  useEffect(() => {
+    getHealth()
+      .then((h) => setNeedsConfig(!h.openai_configured))
+      .catch(() => setNeedsConfig(false));
+  }, []);
 
   const jobRoute = (j: JobState) =>
     j.mode === "cortes" ? `/cortes/${j.id}` : `/editor/${j.id}`;
@@ -98,62 +109,93 @@ export default function HomePage() {
   );
 
   return (
-    <main className="flex flex-col items-center py-12">
+    <main className="flex flex-col items-center py-10 sm:py-14">
+      <div className="mb-6 flex w-full max-w-2xl items-start justify-between gap-4">
+        <div className="flex-1" />
+        <Link
+          href="/configuracoes"
+          className="inline-flex items-center gap-2 rounded-lg border border-border bg-panel px-3 py-2 text-sm text-zinc-300 transition hover:border-accent/40 hover:text-zinc-100"
+        >
+          <Settings className="h-4 w-4" />
+          Configurações
+        </Link>
+      </div>
+
+      {needsConfig && (
+        <Link
+          href="/configuracoes"
+          className="mb-6 w-full max-w-2xl rounded-xl border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-100 transition hover:border-amber-400/60"
+        >
+          Configure sua chave OpenAI para começar a transcrever e detectar cortes →
+        </Link>
+      )}
+
       <div className="mb-10 text-center">
-        <h1 className="text-4xl font-bold tracking-tight">Legendas Locais</h1>
-        <p className="mt-2 text-sm text-zinc-500">
+        <h1 className="text-3xl font-bold tracking-tight sm:text-4xl">Legendas Locais</h1>
+        <p className="mt-2 text-sm text-muted">
           Legendas automáticas ou cortes virais de vídeos longos
         </p>
       </div>
 
-      <div className="mb-4 w-full max-w-2xl">
-        <label className="mb-1 block text-xs font-medium text-zinc-400">Modo</label>
-        <div className="mb-4 flex gap-2">
-          <button
-            type="button"
-            onClick={() => setMode("legendas")}
-            disabled={uploading}
-            className={`flex flex-1 items-center justify-center gap-2 rounded-lg border px-4 py-3 text-sm font-medium transition ${
-              mode === "legendas"
-                ? "border-accent bg-accent/10 text-accent"
-                : "border-border bg-panel text-zinc-400 hover:text-zinc-200"
-            }`}
-          >
-            <Type className="h-4 w-4" />
-            Legendas
-          </button>
-          <button
-            type="button"
-            onClick={() => setMode("cortes")}
-            disabled={uploading}
-            className={`flex flex-1 items-center justify-center gap-2 rounded-lg border px-4 py-3 text-sm font-medium transition ${
-              mode === "cortes"
-                ? "border-accent bg-accent/10 text-accent"
-                : "border-border bg-panel text-zinc-400 hover:text-zinc-200"
-            }`}
-          >
-            <Scissors className="h-4 w-4" />
-            Cortes
-          </button>
-        </div>
-        <label className="mb-1 block text-xs font-medium text-zinc-400">Idioma do áudio</label>
-        <select
-          value={language}
-          onChange={(e) => setLanguage(e.target.value)}
-          disabled={uploading}
-          className="w-full rounded-lg border border-border bg-panel px-3 py-2 text-sm text-zinc-100 outline-none focus:border-accent disabled:opacity-50"
+      <div className="mb-6 w-full max-w-2xl space-y-4">
+        <Field label="Modo">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <button
+              type="button"
+              onClick={() => setMode("legendas")}
+              disabled={uploading}
+              className={`touch-target flex flex-col items-start gap-2 rounded-xl border px-4 py-4 text-left transition ${
+                mode === "legendas"
+                  ? "border-accent bg-accent/10 ring-1 ring-accent/30"
+                  : "border-border bg-panel hover:border-zinc-600"
+              }`}
+            >
+              <Type className={`h-6 w-6 ${mode === "legendas" ? "text-accent" : "text-zinc-400"}`} />
+              <div>
+                <div className={`text-sm font-semibold ${mode === "legendas" ? "text-accent" : "text-zinc-200"}`}>
+                  Legendas
+                </div>
+                <p className="mt-0.5 text-xs text-muted">Transcrever, estilizar e exportar com legenda</p>
+              </div>
+            </button>
+            <button
+              type="button"
+              onClick={() => setMode("cortes")}
+              disabled={uploading}
+              className={`touch-target flex flex-col items-start gap-2 rounded-xl border px-4 py-4 text-left transition ${
+                mode === "cortes"
+                  ? "border-accent bg-accent/10 ring-1 ring-accent/30"
+                  : "border-border bg-panel hover:border-zinc-600"
+              }`}
+            >
+              <Scissors className={`h-6 w-6 ${mode === "cortes" ? "text-accent" : "text-zinc-400"}`} />
+              <div>
+                <div className={`text-sm font-semibold ${mode === "cortes" ? "text-accent" : "text-zinc-200"}`}>
+                  Cortes
+                </div>
+                <p className="mt-0.5 text-xs text-muted">IA encontra trechos virais e exporta MP4s</p>
+              </div>
+            </button>
+          </div>
+        </Field>
+
+        <Field
+          label="Idioma do áudio"
+          hint={mode === "cortes" ? "Ideal para vídeos de 10–60 min no modo Cortes." : undefined}
         >
-          {LANGUAGES.map((l) => (
-            <option key={l.value} value={l.value}>
-              {l.label}
-            </option>
-          ))}
-        </select>
-        {mode === "cortes" && (
-          <p className="mt-2 text-xs text-zinc-500">
-            Ideal para vídeos de 10–60 min. A IA encontra trechos de 1–3 min com sacadas e gera MP4s com legenda.
-          </p>
-        )}
+          <select
+            value={language}
+            onChange={(e) => setLanguage(e.target.value)}
+            disabled={uploading}
+            className={inputClass}
+          >
+            {LANGUAGES.map((l) => (
+              <option key={l.value} value={l.value}>
+                {l.label}
+              </option>
+            ))}
+          </select>
+        </Field>
       </div>
 
       <div
@@ -168,8 +210,10 @@ export default function HomePage() {
           const f = e.dataTransfer.files?.[0];
           if (f) handleFile(f);
         }}
-        className={`w-full max-w-2xl rounded-2xl border-2 border-dashed p-12 text-center transition ${
-          dragging ? "border-accent bg-accent/5" : "border-border bg-panel"
+        className={`w-full max-w-2xl rounded-2xl border-2 border-dashed p-10 text-center transition sm:p-14 ${
+          dragging
+            ? "border-accent bg-accent/10 shadow-[0_0_32px_rgba(250,204,21,0.12)]"
+            : "border-border bg-panel hover:border-zinc-600"
         }`}
       >
         <input
@@ -189,7 +233,7 @@ export default function HomePage() {
               Enviando vídeo... {progress !== null ? `${progress}%` : ""}
             </div>
             {progress !== null && (
-              <div className="h-2 w-full max-w-md overflow-hidden rounded-full bg-bg">
+              <div className="h-2.5 w-full max-w-md overflow-hidden rounded-full bg-bg">
                 <div
                   className="h-full bg-accent transition-all"
                   style={{ width: `${progress}%` }}
@@ -199,14 +243,15 @@ export default function HomePage() {
           </div>
         ) : (
           <button
+            type="button"
             onClick={() => inputRef.current?.click()}
             className="flex w-full flex-col items-center gap-4"
           >
-            <div className="flex h-16 w-16 items-center justify-center rounded-full bg-accent/10">
+            <div className="flex h-16 w-16 items-center justify-center rounded-full bg-accent/15 ring-1 ring-accent/25">
               <Upload className="h-8 w-8 text-accent" />
             </div>
-            <div className="text-lg font-medium">Arraste o vídeo ou clique para escolher</div>
-            <div className="text-xs text-zinc-500">
+            <div className="text-lg font-medium text-zinc-100">Arraste o vídeo ou clique para escolher</div>
+            <div className="text-sm text-muted">
               MP4, MOV, MKV, AVI, WebM — vídeos longos OK no modo Cortes
             </div>
           </button>
@@ -214,21 +259,22 @@ export default function HomePage() {
       </div>
 
       {error && (
-        <div className="mt-4 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300">
+        <div className="mt-4 w-full max-w-2xl rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300">
           {error}
         </div>
       )}
 
       {recentJobs.length > 0 && (
         <div className="mt-12 w-full max-w-2xl">
-          <h2 className="mb-3 text-sm font-medium text-zinc-400">Trabalhos recentes</h2>
+          <h2 className="mb-3 text-sm font-semibold text-zinc-300">Trabalhos recentes</h2>
           <ul className="space-y-2">
             {recentJobs.slice(0, 8).map((j) => (
               <li key={j.id}>
-                <div className="flex w-full items-center gap-3 rounded-lg border border-border bg-panel px-4 py-3 hover:border-accent/50">
+                <div className="flex w-full items-center gap-2 rounded-xl border border-border bg-panel px-3 py-2.5 hover:border-accent/40 sm:gap-3 sm:px-4 sm:py-3">
                   <button
+                    type="button"
                     onClick={() => router.push(jobRoute(j))}
-                    className="flex flex-1 items-center gap-3 truncate text-left"
+                    className="flex min-h-[44px] flex-1 items-center gap-3 truncate text-left"
                   >
                     {j.mode === "cortes" ? (
                       <Scissors className="h-5 w-5 shrink-0 text-accent" />
@@ -237,35 +283,32 @@ export default function HomePage() {
                     )}
                     <div className="flex-1 truncate">
                       <div className="flex items-center gap-2 truncate">
-                        <span className="truncate text-sm">{j.filename}</span>
+                        <span className="truncate text-sm font-medium text-zinc-100">{j.filename}</span>
                         {j.mode === "cortes" && (
-                          <span className="shrink-0 rounded bg-accent/10 px-1.5 py-0.5 text-[10px] text-accent">
+                          <span className="shrink-0 rounded-md bg-accent/10 px-2 py-0.5 text-xs text-accent">
                             Cortes
                           </span>
                         )}
                       </div>
-                      <div className="text-xs text-zinc-500">
+                      <div className="text-xs text-muted">
                         {j.stage} · {Math.round(j.duration / 60)} min
                         {j.clip_count ? ` · ${j.clip_count} cortes` : ""}
                       </div>
                     </div>
                   </button>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleDelete(j.id);
-                    }}
+                  <IconButton
+                    variant="danger"
+                    onClick={() => handleDelete(j.id)}
                     disabled={deletingId === j.id}
                     title="Apagar vídeo"
                     aria-label="Apagar vídeo"
-                    className="shrink-0 rounded-md p-2 text-zinc-500 transition hover:bg-red-500/10 hover:text-red-400 disabled:opacity-40"
                   >
                     {deletingId === j.id ? (
-                      <Loader2 className="h-4 w-4 animate-spin" />
+                      <Loader2 className="h-5 w-5 animate-spin" />
                     ) : (
-                      <Trash2 className="h-4 w-4" />
+                      <Trash2 className="h-5 w-5" />
                     )}
-                  </button>
+                  </IconButton>
                 </div>
               </li>
             ))}

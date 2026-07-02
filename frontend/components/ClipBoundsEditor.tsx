@@ -1,6 +1,11 @@
 "use client";
 
+import { useEffect, useState } from "react";
+import { ChevronRight } from "lucide-react";
 import type { ClipSegment } from "@/lib/api";
+import { getClipPlaybackPlan } from "@/lib/clipPlayback";
+import Field from "@/components/ui/Field";
+import { inputClass } from "@/components/ui/inputClass";
 
 type Props = {
   clip: ClipSegment | null;
@@ -28,64 +33,111 @@ function parseTime(input: string): number | null {
 }
 
 export default function ClipBoundsEditor({ clip, onChange }: Props) {
-  if (!clip) {
-    return (
-      <div className="border-t border-border bg-panel/80 p-4 text-xs text-zinc-500">
-        Selecione um corte na lista acima para ajustar início e fim.
-      </div>
-    );
-  }
+  const [open, setOpen] = useState(false);
+
+  useEffect(() => {
+    setOpen(false);
+  }, [clip?.id]);
+
+  if (!clip) return null;
+
+  const bodySeg = clip.segments?.find((s) => s.role === "body");
+  const isColdOpen = clip.edit_mode === "hook_then_body" && bodySeg;
 
   const setField = (field: "start_s" | "end_s", raw: string) => {
     const val = parseTime(raw);
     if (val === null || val < 0) return;
+    if (isColdOpen && bodySeg) {
+      const nextBody = {
+        ...bodySeg,
+        [field]: Math.round(val * 10) / 10,
+      };
+      nextBody.duration_s = Math.max(0, nextBody.end_s - nextBody.start_s);
+      const hookSeg = clip.segments?.find((s) => s.role === "hook");
+      const hookDur = hookSeg ? hookSeg.end_s - hookSeg.start_s : 0;
+      const nextSegments = (clip.segments ?? []).map((s) =>
+        s.role === "body" ? nextBody : s,
+      );
+      onChange({
+        ...clip,
+        segments: nextSegments,
+        start_word_idx: nextBody.start_word_idx,
+        end_word_idx: nextBody.end_word_idx,
+        duration_s: Math.round((hookDur + nextBody.duration_s) * 1000) / 1000,
+      });
+      return;
+    }
     const next = { ...clip, [field]: Math.round(val * 10) / 10 };
     next.duration_s = Math.max(0, next.end_s - next.start_s);
     onChange(next);
   };
 
+  const displayStart = isColdOpen && bodySeg ? bodySeg.start_s : clip.start_s;
+  const displayEnd = isColdOpen && bodySeg ? bodySeg.end_s : clip.end_s;
+
   const setTitle = (title: string) => onChange({ ...clip, title });
 
   return (
-    <div className="border-t border-accent/20 bg-accent/[0.03] p-4">
-      <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-accent">
-        Ajustar corte selecionado
-      </h4>
-      <label className="mb-2 block text-xs text-zinc-400">
-        Título
-        <input
-          type="text"
-          value={clip.title}
-          onChange={(e) => setTitle(e.target.value)}
-          className="mt-1 w-full rounded border border-border bg-bg px-2 py-1.5 text-sm text-zinc-100"
+    <div className="mx-4 mb-4 mt-1">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center gap-2 rounded-lg border border-border/80 bg-panel/60 px-3 py-2.5 text-left transition hover:border-border hover:bg-panel"
+      >
+        <ChevronRight
+          className={`h-4 w-4 shrink-0 text-zinc-500 transition ${open ? "rotate-90" : ""}`}
         />
-      </label>
-      <div className="grid grid-cols-2 gap-2">
-        <label className="text-xs text-zinc-400">
-          Início (m:ss)
-          <input
-            type="text"
-            defaultValue={fmtTime(clip.start_s)}
-            key={`start-${clip.id}-${clip.start_s}`}
-            onBlur={(e) => setField("start_s", e.target.value)}
-            className="mt-1 w-full rounded border border-border bg-bg px-2 py-1.5 text-sm tabular-nums text-zinc-100"
-          />
-        </label>
-        <label className="text-xs text-zinc-400">
-          Fim (m:ss)
-          <input
-            type="text"
-            defaultValue={fmtTime(clip.end_s)}
-            key={`end-${clip.id}-${clip.end_s}`}
-            onBlur={(e) => setField("end_s", e.target.value)}
-            className="mt-1 w-full rounded border border-border bg-bg px-2 py-1.5 text-sm tabular-nums text-zinc-100"
-          />
-        </label>
-      </div>
-      <p className="mt-2 text-[10px] text-zinc-500">
-        Duração: {Math.floor(clip.duration_s / 60)}:
-        {Math.round(clip.duration_s % 60).toString().padStart(2, "0")} — ideal: 1–3 min
-      </p>
+        <span className="shrink-0 text-xs font-medium text-zinc-300">Ajustar corte</span>
+        {!open && (
+          <span className="min-w-0 truncate text-xs text-zinc-500">
+            {clip.title} · {fmtTime(clip.duration_s)}
+          </span>
+        )}
+      </button>
+
+      {open && (
+        <div className="mt-2 space-y-3 rounded-lg border border-border/80 bg-panel/40 p-3">
+          <Field label="Título">
+            <input
+              type="text"
+              value={clip.title}
+              onChange={(e) => setTitle(e.target.value)}
+              className={inputClass}
+            />
+          </Field>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Início (m:ss)">
+              <input
+                type="text"
+                defaultValue={fmtTime(displayStart)}
+                key={`start-${clip.id}-${displayStart}`}
+                onBlur={(e) => setField("start_s", e.target.value)}
+                className={`${inputClass} tabular-nums`}
+              />
+            </Field>
+            <Field label="Fim (m:ss)">
+              <input
+                type="text"
+                defaultValue={fmtTime(displayEnd)}
+                key={`end-${clip.id}-${displayEnd}`}
+                onBlur={(e) => setField("end_s", e.target.value)}
+                className={`${inputClass} tabular-nums`}
+              />
+            </Field>
+          </div>
+          {isColdOpen && (
+            <p className="text-xs text-accent/80">
+              Gancho imediato + corpo (
+              {getClipPlaybackPlan(clip).map((s) => `${s.role} ${s.start_s.toFixed(0)}s`).join(" → ")}
+              )
+            </p>
+          )}
+          <p className="text-xs text-muted">
+            Duração exportada:{" "}
+            <span className="font-medium text-zinc-300">{fmtTime(clip.duration_s)}</span>
+          </p>
+        </div>
+      )}
     </div>
   );
 }

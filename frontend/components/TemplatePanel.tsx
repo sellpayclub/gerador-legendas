@@ -9,6 +9,10 @@ import {
   type AssetInfo, type ComposeSettings, type ResolutionInfo, type TemplateInfo,
 } from "@/lib/api";
 import ComposeStyleControls from "@/components/ComposeStyleControls";
+import Section from "@/components/ui/Section";
+import Field from "@/components/ui/Field";
+import IconButton from "@/components/ui/IconButton";
+import { inputClass } from "@/components/ui/inputClass";
 
 type Props = {
   jobId: string;
@@ -79,9 +83,8 @@ export default function TemplatePanel({
     : tpl?.overlay_accepts?.includes("video") ? "video/*" : "image/*";
 
   return (
-    <div className="flex flex-col gap-5 p-4">
-      <section>
-        <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-zinc-500">Template</h3>
+    <div className="flex flex-col gap-4 p-4">
+      <Section title="Template" description="Formato e layout do vídeo exportado">
         <div className="grid grid-cols-1 gap-2">
           <TemplateCard
             active={selectedTemplate === null}
@@ -95,7 +98,7 @@ export default function TemplatePanel({
               name={t.name} desc={t.description} aspect={t.aspect} />
           ))}
         </div>
-      </section>
+      </Section>
 
       {tpl && (
         <>
@@ -111,26 +114,29 @@ export default function TemplatePanel({
           )}
 
           {isChoquei && (
-            <>
-              <Field label="Headline (divisão)">
-                <input
-                  value={compose.headline_text ?? ""}
-                  onChange={(e) => onComposeChange({ headline_text: e.target.value })}
-                  className="w-full rounded-md border border-border bg-bg px-3 py-2 text-sm uppercase"
-                  placeholder="INVESTIMENTO PARA CURSOS..."
-                />
-              </Field>
-              <Field label="Estilo">
-                <select
-                  value={compose.headline_style ?? "bold_red"}
-                  onChange={(e) => onComposeChange({ headline_style: e.target.value })}
-                  className="w-full rounded-md border border-border bg-bg px-3 py-2 text-sm"
-                >
-                  <option value="bold_red">Vermelho bold</option>
-                  <option value="simple">Caixa simples</option>
-                </select>
-              </Field>
-            </>
+            <Section title="Headline" description="Título na faixa superior — Enter quebra linha" collapsible defaultOpen>
+              <div className="space-y-3">
+                <Field label="Texto">
+                  <textarea
+                    value={compose.headline_text ?? ""}
+                    onChange={(e) => onComposeChange({ headline_text: e.target.value })}
+                    rows={3}
+                    className={`${inputClass} leading-snug`}
+                    placeholder="Digite o título — Enter para quebrar linha"
+                  />
+                </Field>
+                <Field label="Estilo">
+                  <select
+                    value={compose.headline_style ?? "bold_red"}
+                    onChange={(e) => onComposeChange({ headline_style: e.target.value })}
+                    className={inputClass}
+                  >
+                    <option value="bold_red">Vermelho bold</option>
+                    <option value="simple">Caixa simples</option>
+                  </select>
+                </Field>
+              </div>
+            </Section>
           )}
 
           <UploadSection
@@ -143,21 +149,29 @@ export default function TemplatePanel({
           />
 
           {compose.logo_asset && (
-            <div className="grid grid-cols-2 gap-2 text-xs text-zinc-400">
-              <label>X %<input type="range" min={0} max={100} value={Math.round((compose.logo_x ?? 0.85) * 100)}
-                onChange={(e) => onComposeChange({ logo_x: Number(e.target.value) / 100 })} className="w-full" /></label>
-              <label>Y %<input type="range" min={0} max={100} value={Math.round((compose.logo_y ?? 0.78) * 100)}
-                onChange={(e) => onComposeChange({ logo_y: Number(e.target.value) / 100 })} className="w-full" /></label>
-              <label className="col-span-2">Tamanho<input type="range" min={8} max={40}
-                value={Math.round((compose.logo_scale ?? 0.18) * 100)}
-                onChange={(e) => onComposeChange({ logo_scale: Number(e.target.value) / 100 })} className="w-full" /></label>
-            </div>
+            <Section title="Posição da logo" collapsible defaultOpen={false}>
+              <div className="grid grid-cols-2 gap-3">
+                <Field label="X %">
+                  <input type="range" min={0} max={100} value={Math.round((compose.logo_x ?? 0.85) * 100)}
+                    onChange={(e) => onComposeChange({ logo_x: Number(e.target.value) / 100 })} className="w-full" />
+                </Field>
+                <Field label="Y %">
+                  <input type="range" min={0} max={100} value={Math.round((compose.logo_y ?? 0.78) * 100)}
+                    onChange={(e) => onComposeChange({ logo_y: Number(e.target.value) / 100 })} className="w-full" />
+                </Field>
+                <Field label="Tamanho" className="col-span-2">
+                  <input type="range" min={8} max={40}
+                    value={Math.round((compose.logo_scale ?? 0.18) * 100)}
+                    onChange={(e) => onComposeChange({ logo_scale: Number(e.target.value) / 100 })} className="w-full" />
+                </Field>
+              </div>
+            </Section>
           )}
 
-          <label className="flex items-center gap-2 text-sm text-zinc-300">
+          <label className="flex min-h-[44px] items-center gap-3 rounded-lg border border-border bg-panel/40 px-3 py-2 text-sm text-zinc-300">
             <input type="checkbox" checked={compose.progress_enabled ?? false}
               onChange={(e) => onComposeChange({ progress_enabled: e.target.checked })}
-              className="rounded border-border" />
+              className="h-4 w-4 rounded border-border" />
             Barra de progresso fake
           </label>
 
@@ -169,20 +183,19 @@ export default function TemplatePanel({
             showOverlayCrop={Boolean(tpl?.needs_overlay)}
           />
 
-          <section>
-            <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-zinc-500">Resolução</h3>
+          <Section title="Resolução" description="Qualidade do MP4 exportado">
             <div className="grid grid-cols-3 gap-2">
               {resolutions.map(r => {
                 const id = r.id as "480p" | "720p" | "1080p";
                 return (
                   <button key={r.id} onClick={() => onResolutionChange(id)}
-                    className={`rounded-md border px-3 py-2 text-sm transition ${
+                    className={`touch-target rounded-lg border px-3 py-2 text-sm transition ${
                       resolution === r.id ? "border-accent bg-accent/10 text-accent" : "border-border text-zinc-400 hover:border-zinc-500"
                     }`}>{r.label}</button>
                 );
               })}
             </div>
-          </section>
+          </Section>
         </>
       )}
 
@@ -194,40 +207,31 @@ export default function TemplatePanel({
   );
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <section>
-      <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-zinc-500">{label}</h3>
-      {children}
-    </section>
-  );
-}
-
 function UploadSection({ title, hint, filename, uploading, onUpload, onRemove }: {
   title: string; hint: string; filename?: string | null; uploading: boolean;
   onUpload: () => void; onRemove: () => void;
 }) {
   return (
-    <section>
-      <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-zinc-500">{title}</h3>
-      <p className="mb-2 text-xs text-zinc-500">{hint}</p>
+    <Section title={title} description={hint}>
       {!filename ? (
         <button onClick={onUpload} disabled={uploading}
-          className="flex w-full flex-col items-center gap-2 rounded-lg border-2 border-dashed border-border bg-panel px-4 py-6 text-sm text-zinc-400 transition hover:border-accent/50 hover:text-zinc-200 disabled:opacity-50">
-          {uploading ? <Loader2 className="h-5 w-5 animate-spin" /> : <Upload className="h-5 w-5" />}
+          className="flex w-full flex-col items-center gap-2 rounded-xl border-2 border-dashed border-border bg-panel px-4 py-8 text-sm text-zinc-400 transition hover:border-accent/50 hover:text-zinc-200 disabled:opacity-50">
+          {uploading ? <Loader2 className="h-6 w-6 animate-spin" /> : <Upload className="h-6 w-6" />}
           {uploading ? "Enviando..." : "Clique para enviar"}
         </button>
       ) : (
-        <div className="rounded-lg border border-border bg-panel p-3">
+        <div className="rounded-xl border border-border bg-panel p-3">
           <div className="flex items-center gap-2">
-            <ImageIcon className="h-4 w-4 shrink-0 text-accent" />
-            <span className="flex-1 truncate text-sm">{filename}</span>
-            <button onClick={onUpload} disabled={uploading} className="rounded p-1 text-xs text-zinc-400 hover:text-zinc-100">Trocar</button>
-            <button onClick={onRemove} className="rounded p-1 text-zinc-400 hover:bg-red-500/10 hover:text-red-400"><Trash2 className="h-3.5 w-3.5" /></button>
+            <ImageIcon className="h-5 w-5 shrink-0 text-accent" />
+            <span className="min-w-0 flex-1 truncate text-sm">{filename}</span>
+            <button onClick={onUpload} disabled={uploading} className="touch-target rounded-lg px-2 text-xs text-zinc-400 hover:text-zinc-100">Trocar</button>
+            <IconButton onClick={onRemove} variant="danger" title="Remover">
+              <Trash2 className="h-4 w-4" />
+            </IconButton>
           </div>
         </div>
       )}
-    </section>
+    </Section>
   );
 }
 

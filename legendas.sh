@@ -16,6 +16,14 @@ ok()   { printf "\033[32m%s\033[0m\n" "$1"; }
 info() { printf "\033[36m%s\033[0m\n" "$1"; }
 warn() { printf "\033[33m%s\033[0m\n" "$1"; }
 
+NODE_PATH="/opt/homebrew/opt/node@20/bin:/opt/homebrew/bin:/usr/bin:/bin"
+
+rebuild_frontend_if_stale() {
+  local fe="$ROOT/frontend"
+  info "Compilando frontend..."
+  (cd "$fe" && export PATH="$NODE_PATH" BACKEND_URL="http://127.0.0.1:8000" && npm run build)
+}
+
 ligar() {
   mkdir -p "$ROOT/logs"
   launchctl unload "$PB" 2>/dev/null
@@ -34,6 +42,10 @@ desligar() {
 }
 
 reiniciar() {
+  rebuild_frontend_if_stale
+  # Recarrega frontend para garantir scripts atualizados (evita next start stale).
+  launchctl unload "$PF" 2>/dev/null || true
+  launchctl load -w "$PF" 2>/dev/null || true
   launchctl kickstart -k "gui/$(id -u)/$B" 2>/dev/null || launchctl load -w "$PB" 2>/dev/null
   launchctl kickstart -k "gui/$(id -u)/$F" 2>/dev/null || launchctl load -w "$PF" 2>/dev/null
   info "Reiniciando..."
@@ -63,7 +75,13 @@ atualizar() {
   info "Atualizando dependencias do backend..."
   (cd "$ROOT/backend" && source .venv/bin/activate && pip install -q -e .)
   info "Recompilando o frontend..."
-  (cd "$ROOT/frontend" && export PATH="/opt/homebrew/opt/node@20/bin:$PATH" && npm install --silent && npm run build)
+  (cd "$ROOT/frontend" && export PATH="$NODE_PATH" && npm install --silent && npm run build)
+  mkdir -p "$ROOT/frontend/.next/standalone/.next"
+  cp -r "$ROOT/frontend/.next/static" "$ROOT/frontend/.next/standalone/.next/static"
+  if [[ -d "$ROOT/frontend/public" ]]; then
+    rm -rf "$ROOT/frontend/.next/standalone/public"
+    cp -r "$ROOT/frontend/public" "$ROOT/frontend/.next/standalone/public"
+  fi
   reiniciar
   ok "Atualizado!"
 }

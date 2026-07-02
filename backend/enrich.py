@@ -10,10 +10,10 @@ from typing import Optional
 
 from dotenv import load_dotenv
 
-load_dotenv()
+from openai_chat import chat_json
+from app_settings import get_enrich_model
 
-OPENAI_CHAT_URL = "https://api.openai.com/v1/chat/completions"
-DEFAULT_MODEL = os.environ.get("ENRICH_MODEL", "gpt-4o-mini")
+load_dotenv()
 CHUNK_SIZE = 70
 
 _EMOJI_RE = re.compile(
@@ -83,7 +83,7 @@ def enrich_words(
         "changed": changed,
         "punctuation": punctuation,
         "emojis": emojis,
-        "model": DEFAULT_MODEL,
+        "model": get_enrich_model(),
     }
     save_cache(job_dir, {"updates": {str(k): v for k, v in updates.items()}, **result})
     return result
@@ -112,34 +112,12 @@ def _context_block(words: list[dict], idx: int, radius: int = 5) -> str:
 
 
 def _openai_json(system: str, user: str, *, max_tokens: int = 1500) -> dict:
-    api_key = os.environ.get("OPENAI_API_KEY")
-    if not api_key:
-        raise RuntimeError("OPENAI_API_KEY não configurada em backend/.env")
-
-    import requests
-    resp = requests.post(
-        OPENAI_CHAT_URL,
-        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-        json={
-            "model": DEFAULT_MODEL,
-            "temperature": 0.2,
-            "max_tokens": max_tokens,
-            "response_format": {"type": "json_object"},
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-        },
+    return chat_json(
+        get_enrich_model(), system, user,
+        max_tokens=max_tokens,
+        temperature=0.2,
         timeout=120,
     )
-    if resp.status_code != 200:
-        raise RuntimeError(f"OpenAI chat error {resp.status_code}: {resp.text[:400]}")
-
-    raw = resp.json().get("choices", [{}])[0].get("message", {}).get("content") or "{}"
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        return {}
 
 
 def _parse_updates(data: dict, n_words: int) -> dict[int, str]:

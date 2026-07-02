@@ -8,7 +8,7 @@ from typing import Callable, Optional
 
 import keywords
 from ass_gen import generate_ass
-from clips import clip_dir, clip_output_path, load_clip_keywords, words_for_render
+from clips import clip_dir, clip_output_path, clip_source_bounds, load_clip_keywords, words_for_render
 from media import ffmpeg_bin
 from overlays import ComposeExtras, InstagramHeader
 from presets import StyleConfig, apply_preset
@@ -53,6 +53,61 @@ def _resolve_template(template: str | None, aspect: str) -> TemplateDef | None:
     return None
 
 
+def concat_video_segments(paths: list[Path], out: Path) -> None:
+    """Concatenate video segments via ffmpeg concat demuxer."""
+    if not paths:
+        raise RuntimeError("Nenhum segmento para concatenar")
+    if len(paths) == 1:
+        if out.exists():
+            out.unlink()
+        paths[0].rename(out)
+        return
+    out.parent.mkdir(parents=True, exist_ok=True)
+    if out.exists():
+        out.unlink()
+    list_path = out.parent / "concat_list.txt"
+    lines = [f"file '{p.resolve()}'" for p in paths]
+    list_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    cmd = [
+        ffmpeg_bin(), "-y",
+        "-f", "concat", "-safe", "0",
+        "-i", str(list_path),
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+        "-c:a", "aac", "-b:a", "128k",
+        "-movflags", "+faststart",
+        str(out),
+    ]
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    list_path.unlink(missing_ok=True)
+    if proc.returncode != 0:
+        raise RuntimeError(f"ffmpeg concat failed: {proc.stderr[-600:]}")
+
+
+def _cut_clip_source(video_path: Path, cdir: Path, clip: dict) -> Path:
+    """Cut source video into raw.mp4 (single segment or hook+body concat)."""
+    raw_path = cdir / "raw.mp4"
+    bounds = clip_source_bounds(clip)
+    if len(bounds) <= 1:
+        cut_video_segment(
+            video_path, raw_path,
+            float(bounds[0]["start_s"]), float(bounds[0]["end_s"]),
+        )
+        return raw_path
+
+    part_paths: list[Path] = []
+    for i, seg in enumerate(bounds):
+        part = cdir / f"part_{i}.mp4"
+        cut_video_segment(
+            video_path, part,
+            float(seg["start_s"]), float(seg["end_s"]),
+        )
+        part_paths.append(part)
+    concat_video_segments(part_paths, raw_path)
+    for p in part_paths:
+        p.unlink(missing_ok=True)
+    return raw_path
+
+
 def _video_pos_from_opts(compose_opts: dict | None) -> tuple[float, float]:
     opts = compose_opts or {}
     vpx = opts.get("video_pos_x")
@@ -82,9 +137,7 @@ def render_clip(
 ) -> Path:
     """Cut segment, generate ASS, burn subtitles → clips/{id}/output.mp4."""
     clip_id = clip["id"]
-    start_s = float(clip["start_s"])
-    end_s = float(clip["end_s"])
-    duration = end_s - start_s
+    duration = float(clip.get("duration_s") or (float(clip["end_s"]) - float(clip["start_s"])))
 
     cdir = clip_dir(job_dir, clip_id)
     raw_path = cdir / "raw.mp4"
@@ -93,7 +146,7 @@ def render_clip(
 
     if on_progress:
         on_progress(0.05, "Cortando vídeo...")
-    cut_video_segment(video_path, raw_path, start_s, end_s)
+    _cut_clip_source(video_path, cdir, clip)
 
     sliced = words_for_render(job_dir, words, clip)
     cfg: StyleConfig = apply_preset(preset, custom_style)

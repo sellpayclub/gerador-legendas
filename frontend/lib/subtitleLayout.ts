@@ -5,9 +5,10 @@ import {
   KARAOKE_LEAD_S,
   groupWordsByPause,
   lineVisibilityWindow,
+  nonOverlappingLineWindows,
 } from "@/lib/timing";
 
-export { KARAOKE_LEAD_S, groupWordsByPause, lineVisibilityWindow };
+export { KARAOKE_LEAD_S, groupWordsByPause, lineVisibilityWindow, nonOverlappingLineWindows };
 
 export function isWordActive(w: Word, currentTime: number): boolean {
   return currentTime >= w.start - KARAOKE_LEAD_S && currentTime < w.end;
@@ -89,10 +90,14 @@ export function findActiveGroup(
   currentTime: number,
   opts?: { staticPreview?: boolean },
 ): { group: Word[] | null; activeIdx: number } {
+  if (!groups.length) return { group: null, activeIdx: -1 };
+
+  const windows = nonOverlappingLineWindows(groups);
   const activeIdx = words.findIndex((w) => isWordActive(w, currentTime));
 
   if (activeIdx >= 0) {
-    for (const g of groups) {
+    for (let gi = 0; gi < groups.length; gi++) {
+      const g = groups[gi];
       const startIdx = words.indexOf(g[0]);
       if (startIdx <= activeIdx && activeIdx < startIdx + g.length) {
         return { group: g, activeIdx };
@@ -100,15 +105,21 @@ export function findActiveGroup(
     }
   }
 
-  for (const g of groups) {
-    const { start, end } = lineVisibilityWindow(g);
+  for (let gi = 0; gi < groups.length; gi++) {
+    const { start, end } = windows[gi];
     if (currentTime >= start && currentTime <= end) {
-      return { group: g, activeIdx: activeIdx >= 0 ? activeIdx : words.indexOf(g[0]) };
+      const idx = activeIdx >= 0 ? activeIdx : words.indexOf(groups[gi][0]);
+      return { group: groups[gi], activeIdx: idx };
     }
   }
 
-  if (opts?.staticPreview && groups.length > 0) {
-    return { group: groups[0], activeIdx: words.indexOf(groups[0][0]) };
+  // Static preview only before speech starts (style editing at t≈0).
+  if (opts?.staticPreview) {
+    const firstStart = windows[0]?.start ?? groups[0][0].start;
+    if (currentTime < firstStart + 0.001) {
+      return { group: groups[0], activeIdx: words.indexOf(groups[0][0]) };
+    }
   }
+
   return { group: null, activeIdx: -1 };
 }

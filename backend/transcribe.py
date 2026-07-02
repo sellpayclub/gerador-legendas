@@ -19,13 +19,15 @@ from typing import Callable, Optional
 
 from dotenv import load_dotenv
 
+from app_settings import (
+    get_openai_api_key,
+    get_openai_model,
+    get_openai_transcribe_url,
+    get_transcribe_engine,
+)
+
 load_dotenv()
 
-ENGINE = os.environ.get("TRANSCRIBE_ENGINE", "").strip().lower()
-if not ENGINE:
-    ENGINE = "openai" if os.environ.get("OPENAI_API_KEY") else "mlx"
-
-OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "whisper-1")
 MLX_MODEL = os.environ.get(
     "WHISPER_MODEL", "mlx-community/whisper-medium-mlx-4bit"
 )
@@ -45,7 +47,8 @@ def transcribe(
 ) -> dict:
     """Transcribe audio and write words.json. Returns the parsed dict."""
     dims = {"width": width, "height": height, "fps": fps}
-    if ENGINE == "openai":
+    engine = get_transcribe_engine()
+    if engine == "openai":
         return _transcribe_openai(audio_wav, out_json, duration, on_progress, language, dims)
     return _transcribe_mlx(audio_wav, out_json, duration, on_progress, language, MLX_MODEL, dims)
 
@@ -61,7 +64,6 @@ def _payload_with_dims(payload: dict, dims: dict) -> dict:
 
 # ---------- OpenAI (direct HTTP, no SDK) ----------
 
-OPENAI_URL = "https://api.openai.com/v1/audio/transcriptions"
 # OpenAI Whisper API hard limit is 25 MB; stay under with margin.
 OPENAI_MAX_BYTES = int(os.environ.get("OPENAI_MAX_AUDIO_BYTES", str(24 * 1024 * 1024)))
 
@@ -171,15 +173,12 @@ def _transcribe_openai_single(
 def _call_openai_transcribe(audio_path: Path, language: Optional[str]) -> dict:
     import requests
 
-    api_key = os.environ.get("OPENAI_API_KEY")
-    if not api_key:
-        raise RuntimeError(
-            "OPENAI_API_KEY não configurada. Adicione em backend/.env"
-        )
+    api_key = get_openai_api_key()
+    openai_model = get_openai_model()
 
     lang = language or os.environ.get("WHISPER_LANGUAGE") or None
     form_data: list[tuple[str, str]] = [
-        ("model", OPENAI_MODEL),
+        ("model", openai_model),
         ("response_format", "verbose_json"),
         ("timestamp_granularities[]", "word"),
     ]
@@ -191,7 +190,7 @@ def _call_openai_transcribe(audio_path: Path, language: Optional[str]) -> dict:
         files = {"file": (audio_path.name, fh, mime)}
         headers = {"Authorization": f"Bearer {api_key}"}
         resp = requests.post(
-            OPENAI_URL, headers=headers, files=files, data=form_data, timeout=600,
+            get_openai_transcribe_url(), headers=headers, files=files, data=form_data, timeout=600,
         )
     if resp.status_code != 200:
         raise RuntimeError(f"OpenAI API error {resp.status_code}: {resp.text[:500]}")

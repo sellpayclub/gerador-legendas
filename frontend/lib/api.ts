@@ -25,12 +25,24 @@ export type JobState = {
   clip_count?: number;
 };
 
+export type ClipSegmentPart = {
+  role: "hook" | "body";
+  start_word_idx: number;
+  end_word_idx: number;
+  start_s: number;
+  end_s: number;
+  duration_s?: number;
+};
+
 export type ClipSegment = {
   id: string;
   title: string;
   hook?: string;
+  hook_text?: string;
   insight?: string;
   score?: number;
+  edit_mode?: "linear" | "hook_then_body";
+  segments?: ClipSegmentPart[];
   start_word_idx: number;
   end_word_idx: number;
   start_s: number;
@@ -80,6 +92,13 @@ export type ComposeSettings = {
   ig_caption_size?: number;
 };
 
+export type CortesFormatPresets = Partial<Record<ExportFormatId, {
+  position: { x: number | null; y: number | null };
+  stylePos: { pos_x: number | null; pos_y: number | null };
+  compose: ComposeSettings;
+  videoPos: { x: number; y: number };
+}>>;
+
 export type ClipsData = {
   clips: ClipSegment[];
   manual?: boolean;
@@ -118,6 +137,7 @@ export type ClipsData = {
   ig_avatar_size?: number;
   ig_username_size?: number;
   ig_caption_size?: number;
+  format_presets?: CortesFormatPresets;
 };
 
 export type ClipsRenderRequest = {
@@ -154,6 +174,7 @@ export type ClipsRenderRequest = {
   ig_avatar_size?: number;
   ig_username_size?: number;
   ig_caption_size?: number;
+  format_presets?: CortesFormatPresets;
 };
 
 export type ClipsSettings = {
@@ -189,6 +210,7 @@ export type ClipsSettings = {
   ig_avatar_size?: number;
   ig_username_size?: number;
   ig_caption_size?: number;
+  format_presets?: CortesFormatPresets;
 };
 
 export type StyleConfig = {
@@ -464,28 +486,33 @@ async function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+/** Poll until clip detection finishes (no new detect POST). */
+export async function pollForClips(
+  jobId: string,
+  opts?: { onProgress?: (msg: string) => void; timeoutMs?: number },
+): Promise<ClipsData> {
+  const deadline = Date.now() + (opts?.timeoutMs ?? 900_000);
+  while (Date.now() < deadline) {
+    const r = await getClips(jobId);
+    if (r.detect_error) {
+      throw new Error(r.detect_error);
+    }
+    if (!r.detecting) {
+      return r;
+    }
+    opts?.onProgress?.("Detectando cortes com IA (pode levar vários minutos)...");
+    await sleep(2500);
+  }
+  throw new Error("Tempo esgotado — a detecção ainda está rodando. Recarregue em instantes.");
+}
+
 /** Start detection and poll until clips are ready (avoids proxy timeout). */
 export async function waitForClips(
   jobId: string,
   opts?: { onProgress?: (msg: string) => void; timeoutMs?: number },
 ): Promise<ClipsData> {
   await detectClips(jobId);
-  const deadline = Date.now() + (opts?.timeoutMs ?? 180_000);
-  while (Date.now() < deadline) {
-    const r = await getClips(jobId);
-    if (r.detect_error) {
-      throw new Error(r.detect_error);
-    }
-    if (!r.detecting && (r.clips?.length ?? 0) > 0) {
-      return r;
-    }
-    if (!r.detecting && !r.detect_error && r.clips) {
-      return r;
-    }
-    opts?.onProgress?.("Detectando cortes com IA...");
-    await sleep(2500);
-  }
-  throw new Error("Tempo esgotado — a detecção ainda está rodando. Recarregue em instantes.");
+  return pollForClips(jobId, opts);
 }
 
 export async function getClips(jobId: string): Promise<ClipsData> {
@@ -607,6 +634,75 @@ export async function saveClipKeywords(
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ indices }),
+    }),
+  );
+}
+
+export type HealthStatus = {
+  ok: boolean;
+  openai_configured: boolean;
+  transcribe_engine: string;
+  transcribe_ready: boolean;
+  ffmpeg_ok: boolean;
+};
+
+export type AppSettingsPublic = {
+  llm_provider: string;
+  openai_api_key_masked: string;
+  openai_api_key_set: boolean;
+  openai_base_url: string;
+  transcribe_engine: string;
+  openai_model: string;
+  clips_model: string;
+  keywords_model: string;
+  enrich_model: string;
+  allowed_origins: string[];
+  public_domain: string;
+  configured: boolean;
+  transcribe_ready: boolean;
+  warnings: string[];
+  source: "none" | "env" | "file" | "both";
+  platform: string;
+  mlx_available: boolean;
+};
+
+export type SettingsUpdatePayload = {
+  llm_provider?: string;
+  openai_api_key?: string;
+  openai_base_url?: string;
+  transcribe_engine?: string;
+  openai_model?: string;
+  clips_model?: string;
+  keywords_model?: string;
+  enrich_model?: string;
+  allowed_origins?: string[];
+  public_domain?: string;
+};
+
+export async function getHealth(): Promise<HealthStatus> {
+  return jsonOrThrow(await fetch("/api/health"));
+}
+
+export async function getSettings(): Promise<AppSettingsPublic> {
+  return jsonOrThrow(await fetch("/api/settings"));
+}
+
+export async function updateSettings(payload: SettingsUpdatePayload): Promise<AppSettingsPublic> {
+  return jsonOrThrow(
+    await fetch("/api/settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }),
+  );
+}
+
+export async function testOpenAI(apiKey?: string): Promise<{ ok: boolean; message: string }> {
+  return jsonOrThrow(
+    await fetch("/api/settings/test", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(apiKey ? { openai_api_key: apiKey } : {}),
     }),
   );
 }

@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Play, Pause, SkipBack, SkipForward } from "lucide-react";
+import { Play, Pause, SkipBack, SkipForward, Move } from "lucide-react";
 import type { StyleConfig, Word } from "@/lib/api";
 import KaraokeLine, { heroOutlineStyle } from "@/components/KaraokeLine";
 import {
@@ -11,6 +11,7 @@ import {
 } from "@/lib/subtitleLayout";
 import { activePhrase, inHighlightEffectWindow, type HighlightPhrase } from "@/lib/highlightPhrases";
 import { fitHeroPhrase, heroCssFontSize } from "@/lib/heroLayout";
+import { hexWithAlpha } from "@/lib/colorAlpha";
 import {
   DEFAULT_PAUSE_THRESHOLD_S,
   groupWordsByPause,
@@ -98,8 +99,8 @@ export default function VideoPreview({
     [groups, displayWords, currentTime],
   );
 
-  const scaleX = videoRect ? videoRect.w / width : 1;
-  const scaleY = videoRect ? videoRect.h / height : 1;
+  const scaleX = videoRect ? videoRect.w / width : 0.45;
+  const scaleY = videoRect ? Math.max(0.001, videoRect.h / height) : 0.45;
 
   const defaultPos = { x: width / 2, y: height - style.margin_v };
   const pos = {
@@ -296,13 +297,13 @@ export default function VideoPreview({
           </div>
         )}
 
-        {videoRect && activeGroup && !showHero && (
+        {activeGroup && !showHero && (
           <div
             ref={overlayRef}
             onPointerDown={onPointerDown}
             onPointerMove={onPointerMove}
             onPointerUp={onPointerUp}
-            className="absolute touch-none cursor-grab select-none active:cursor-grabbing"
+            className="absolute touch-none cursor-grab select-none active:cursor-grabbing hover:ring-2 hover:ring-accent/40 focus-visible:ring-2 focus-visible:ring-accent/50"
             style={{
               left: overlayCssX,
               top: overlayCssY,
@@ -327,10 +328,11 @@ export default function VideoPreview({
           </div>
         )}
 
-        <div className="pointer-events-none absolute bottom-2 left-2 rounded bg-black/60 px-2 py-1 text-[10px] text-zinc-400">
+        <div className="pointer-events-none absolute bottom-2 left-2 flex items-center gap-1.5 rounded-lg bg-black/70 px-2.5 py-1.5 text-sm text-zinc-200 backdrop-blur-sm">
+          <Move className="h-4 w-4 shrink-0 text-accent" />
           {isPlaceholder
-            ? "Preview — arraste para posicionar (transcrição em andamento)"
-            : "Arraste a legenda para reposicionar"}
+            ? "Arraste para posicionar (transcrição em andamento)"
+            : "Arraste para posicionar"}
         </div>
       </div>
 
@@ -381,17 +383,4 @@ function fmtTime(s: number): string {
   const m = Math.floor(s / 60);
   const sec = Math.floor(s % 60);
   return `${m}:${sec.toString().padStart(2, "0")}`;
-}
-
-function hexWithAlpha(hex: string, alpha: number): string {
-  const s = hex.replace("#", "");
-  let r = "0",
-    g = "0",
-    b = "0";
-  if (s.length === 6) {
-    r = s.slice(0, 2);
-    g = s.slice(2, 4);
-    b = s.slice(4, 6);
-  }
-  return `rgba(${parseInt(r, 16)}, ${parseInt(g, 16)}, ${parseInt(b, 16)}, ${alpha})`;
 }

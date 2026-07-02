@@ -7,11 +7,20 @@ import KaraokeLine, { heroOutlineStyle } from "@/components/KaraokeLine";
 import { activePhrase, inHighlightEffectWindow, type HighlightPhrase } from "@/lib/highlightPhrases";
 import { fakeProgress } from "@/lib/fakeProgress";
 import {
+  clampHeadlineWidthPct,
+  clampProgressHeightPct,
+  headlineBoxBorder,
+  headlineDisplayText,
+  headlineFontSize,
+  layoutHeadlineLines,
+} from "@/lib/composeLayout";
+import {
   findActiveGroup,
   fontFamilyCss,
   isWordActive,
 } from "@/lib/subtitleLayout";
 import { fitHeroPhrase } from "@/lib/heroLayout";
+import { hexWithAlpha } from "@/lib/colorAlpha";
 import {
   DEFAULT_PAUSE_THRESHOLD_S,
   groupWordsByPause,
@@ -53,6 +62,7 @@ export default function TemplatePreview({
   const [overlayDragging, setOverlayDragging] = useState(false);
   const [logoDragging, setLogoDragging] = useState(false);
   const [scaleY, setScaleY] = useState(0.45);
+  const [frameWidth, setFrameWidth] = useState(0);
   const [videoTime, setVideoTime] = useState(0);
   const [videoDuration, setVideoDuration] = useState(0);
   const tpl = template;
@@ -114,7 +124,10 @@ export default function TemplatePreview({
   useEffect(() => {
     const el = frameRef.current;
     if (!el) return;
-    const update = () => setScaleY(el.clientHeight / tpl.height);
+    const update = () => {
+      setFrameWidth(el.clientWidth);
+      setScaleY(Math.max(0.001, el.clientHeight / tpl.height));
+    };
     update();
     const ro = new ResizeObserver(update);
     ro.observe(el);
@@ -127,11 +140,25 @@ export default function TemplatePreview({
   const isImage = overlayAsset && /\.(png|jpe?g|webp|gif|bmp)$/i.test(overlayAsset);
   const isVideo = overlayAsset && !isImage && /\.(mp4|mov|mkv|webm|m4v)$/i.test(overlayAsset);
 
-  const headline = compose?.headline_text?.trim();
+  const headlineRaw = compose?.headline_text ?? "";
   const headlineStyle = compose?.headline_style ?? "bold_red";
-  const headlineWidthPct = (compose?.headline_max_width_pct ?? 0.85) * 100;
+  const headlineWidthPct = clampHeadlineWidthPct(compose?.headline_max_width_pct);
   const headlineAlign = compose?.headline_align ?? "center";
-  const showHeadline = Boolean(headline && !isHstack && tpl.id.startsWith("choquei_"));
+  const headlineFs = headlineFontSize(compose?.headline_font_size);
+  const headlineBorder = headlineBoxBorder(headlineStyle);
+  const headlineCssFs = Math.max(10, Math.round(headlineFs * scaleY));
+  const headlinePad = Math.max(4, Math.round(headlineBorder * scaleY));
+  const headlinePadX = Math.round(headlinePad * 0.85);
+  const headlineDisplay = headlineRaw.trim()
+    ? headlineDisplayText(headlineRaw, headlineStyle)
+    : "";
+  const headlineWrapped = useMemo(() => {
+    if (!headlineDisplay || frameWidth <= 0) return headlineDisplay;
+    const innerW = Math.max(20, frameWidth * headlineWidthPct - headlinePadX * 2);
+    return layoutHeadlineLines(headlineDisplay, innerW, headlineCssFs).join("\n");
+  }, [headlineDisplay, frameWidth, headlineWidthPct, headlinePadX, headlineCssFs]);
+  const progressHeightPct = clampProgressHeightPct(compose?.progress_height_pct);
+  const showHeadline = Boolean(headlineWrapped && !isHstack && tpl.id.startsWith("choquei_"));
   const divPct = isHstack ? 0 : (tpl.overlay_region.h / tpl.height) * 100;
   const overlayPos = {
     x: compose?.overlay_pos_x ?? 0.5,
@@ -251,16 +278,22 @@ export default function TemplatePreview({
           <div className="flex min-h-0 flex-1">
             <div
               ref={overlayWrapRef}
-              className={`relative w-1/2 overflow-hidden bg-zinc-900 ${onOverlayPosChange ? "cursor-move" : ""}`}
+              className={`relative w-1/2 overflow-hidden bg-zinc-900 ${onOverlayPosChange ? "cursor-move ring-inset hover:ring-2 hover:ring-accent/35" : ""}`}
               onPointerDown={handleOverlayPointerDown}
               onPointerMove={(e) => overlayDragging && updateOverlayFromPointer(e)}
               onPointerUp={() => setOverlayDragging(false)}
             >
               {renderMedia("h-full w-full object-cover")}
+              {onOverlayPosChange && (
+                <div className="pointer-events-none absolute left-2 top-2 flex items-center gap-1.5 rounded-lg bg-black/70 px-2.5 py-1.5 text-sm text-zinc-200 backdrop-blur-sm">
+                  <Move className="h-4 w-4 shrink-0 text-accent" />
+                  Arraste mídia
+                </div>
+              )}
             </div>
             <div
               ref={videoWrapRef}
-              className={`relative w-1/2 overflow-hidden bg-black ${onVideoPosChange ? "cursor-move" : ""}`}
+              className={`relative w-1/2 overflow-hidden bg-black ${onVideoPosChange ? "cursor-move ring-inset hover:ring-2 hover:ring-accent/35" : ""}`}
               onPointerDown={handlePointerDown}
               onPointerMove={(e) => dragging && updateVideoFromPointer(e)}
               onPointerUp={() => setDragging(false)}
@@ -273,6 +306,12 @@ export default function TemplatePreview({
                 playsInline
                 onClick={() => videoRef.current?.paused ? videoRef.current.play() : videoRef.current?.pause()}
               />
+              {onVideoPosChange && (
+                <div className="pointer-events-none absolute right-2 top-2 flex items-center gap-1.5 rounded-lg bg-black/70 px-2.5 py-1.5 text-sm text-zinc-200 backdrop-blur-sm">
+                  <Move className="h-4 w-4 shrink-0 text-accent" />
+                  Arraste para enquadrar
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -286,16 +325,22 @@ export default function TemplatePreview({
         >
           <div
             ref={overlayWrapRef}
-            className={`relative overflow-hidden bg-zinc-900 ${onOverlayPosChange ? "cursor-move" : ""}`}
+            className={`relative overflow-hidden bg-zinc-900 ${onOverlayPosChange ? "cursor-move ring-inset hover:ring-2 hover:ring-accent/35" : ""}`}
             onPointerDown={handleOverlayPointerDown}
             onPointerMove={(e) => overlayDragging && updateOverlayFromPointer(e)}
             onPointerUp={() => setOverlayDragging(false)}
           >
             {renderMedia("h-full w-full object-cover")}
+            {onOverlayPosChange && (
+              <div className="pointer-events-none absolute left-2 top-2 flex items-center gap-1.5 rounded-lg bg-black/70 px-2.5 py-1.5 text-sm text-zinc-200 backdrop-blur-sm">
+                <Move className="h-4 w-4 shrink-0 text-accent" />
+                Arraste mídia
+              </div>
+            )}
           </div>
           <div
             ref={videoWrapRef}
-            className={`relative overflow-hidden bg-black ${onVideoPosChange ? "cursor-move" : ""}`}
+            className={`relative overflow-hidden bg-black ${onVideoPosChange ? "cursor-move ring-inset hover:ring-2 hover:ring-accent/35" : ""}`}
             onPointerDown={handlePointerDown}
             onPointerMove={(e) => dragging && updateVideoFromPointer(e)}
             onPointerUp={() => setDragging(false)}
@@ -309,8 +354,9 @@ export default function TemplatePreview({
               onClick={() => videoRef.current?.paused ? videoRef.current.play() : videoRef.current?.pause()}
             />
             {onVideoPosChange && (
-              <div className="pointer-events-none absolute right-2 top-2 flex items-center gap-1 rounded bg-black/60 px-2 py-1 text-[10px] text-zinc-300">
-                <Move className="h-3 w-3" /> arraste pra enquadrar
+              <div className="pointer-events-none absolute right-2 top-2 flex items-center gap-1.5 rounded-lg bg-black/70 px-2.5 py-1.5 text-sm text-zinc-200 backdrop-blur-sm">
+                <Move className="h-4 w-4 shrink-0 text-accent" />
+                Arraste para enquadrar
               </div>
             )}
           </div>
@@ -319,37 +365,46 @@ export default function TemplatePreview({
 
       {showHeadline && (
         <div
-          className="pointer-events-none absolute z-20 -translate-y-1/2 px-3 py-1.5 font-bold"
+          className="pointer-events-none absolute z-20 font-bold"
           style={{
             top: `${divPct}%`,
-            maxWidth: `${headlineWidthPct}%`,
-            width: "max-content",
+            width: `${headlineWidthPct * 100}%`,
+            boxSizing: "border-box",
             left: headlineAlign === "left" ? "2%" : headlineAlign === "right" ? "auto" : "50%",
             right: headlineAlign === "right" ? "2%" : "auto",
             transform: headlineAlign === "center" ? "translate(-50%, -50%)" : "translateY(-50%)",
-            fontSize: `${Math.max(10, Math.round((compose?.headline_font_size ?? 42) * 0.35))}px`,
+            fontSize: `${headlineCssFs}px`,
+            fontFamily: 'var(--font-roboto), sans-serif',
+            fontWeight: 700,
+            lineHeight: 1.15,
+            padding: `${headlinePad}px ${headlinePadX}px`,
+            whiteSpace: "pre-wrap",
+            wordBreak: "normal",
+            overflowWrap: "break-word",
             background: headlineStyle === "bold_red" ? (compose?.headline_bg ?? "#E31B23") : "rgba(0,0,0,0.85)",
-            color: headlineStyle === "bold_red" ? (compose?.headline_color ?? "#fff") : (compose?.headline_color ?? "#fff"),
-            textTransform: headlineStyle === "bold_red" ? "uppercase" : "none",
+            color: compose?.headline_color ?? "#fff",
             textAlign: headlineAlign,
           }}
         >
-          {headline}
+          {headlineWrapped}
         </div>
       )}
 
       {active && active.length > 0 && !showHero && (
         <div
-          className="absolute -translate-x-1/2 -translate-y-1/2 text-center"
+          className="pointer-events-none absolute -translate-x-1/2 -translate-y-1/2 text-center"
           style={{
             left: `${subXpct}%`,
             top: `${subYpct}%`,
             overflow: "visible",
+            zIndex: 25,
           }}
         >
           <span style={{
             padding: style.box ? "0.1em 0.4em" : "0",
-            background: style.box ? `${style.box_color}` : "transparent",
+            background: style.box
+              ? hexWithAlpha(style.box_color, style.box_opacity ?? 0.5)
+              : "transparent",
             borderRadius: style.box ? "4px" : "0",
             display: "inline-block",
           }}>
@@ -399,13 +454,20 @@ export default function TemplatePreview({
 
       {compose?.progress_enabled && (
         <div
-          className="absolute bottom-0 left-0 z-40"
+          className="absolute bottom-0 left-0 z-40 w-full overflow-hidden"
           style={{
-            width: `${progressPct}%`,
-            height: `${(compose.progress_height_pct ?? 0.04) * 100}%`,
-            background: compose.progress_color ?? "#E31B23",
+            height: `${progressHeightPct * 100}%`,
+            background: "rgba(255,255,255,0.12)",
           }}
-        />
+        >
+          <div
+            className="h-full max-w-full"
+            style={{
+              width: `${Math.min(100, Math.max(0, progressPct))}%`,
+              background: compose.progress_color ?? "#E31B23",
+            }}
+          />
+        </div>
       )}
     </div>
   );

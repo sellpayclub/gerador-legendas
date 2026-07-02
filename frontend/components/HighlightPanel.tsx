@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import { Loader2, Sparkles } from "lucide-react";
 import { detectKeywords, saveKeywords, detectClipKeywords, saveClipKeywords, type Word } from "@/lib/api";
 import { groupHighlightPhrases } from "@/lib/highlightPhrases";
+import Section from "@/components/ui/Section";
 
 type Props = {
   jobId: string;
@@ -77,68 +78,62 @@ export default function HighlightPanel({
 
   return (
     <div className="flex flex-col gap-4 p-4">
-      <section className="rounded-lg border border-border bg-panel p-4">
+      <Section title="Destaque dramático" description="Frase grande no centro + vídeo embaçado no momento certo.">
         <div className="flex items-center justify-between gap-3">
-          <div>
-            <h3 className="text-sm font-semibold text-zinc-100">Destaque dramático</h3>
-            <p className="mt-1 text-xs text-zinc-500">
-              Frase grande no centro + vídeo embaçado no momento certo.
-            </p>
-          </div>
+          <p className="text-sm text-zinc-400">
+            {highlightEnabled ? "Ativo — configure frases abaixo" : "Desligado"}
+          </p>
           <button
             type="button"
             role="switch"
             aria-checked={highlightEnabled}
             onClick={() => onHighlightEnabledChange(!highlightEnabled)}
-            className={`relative h-7 w-12 shrink-0 rounded-full transition ${
+            className={`relative h-8 w-14 shrink-0 rounded-full transition ${
               highlightEnabled ? "bg-accent" : "bg-zinc-600"
             }`}
           >
             <span
-              className={`absolute top-0.5 h-6 w-6 rounded-full bg-white shadow transition ${
-                highlightEnabled ? "left-5" : "left-0.5"
+              className={`absolute top-1 h-6 w-6 rounded-full bg-white shadow transition ${
+                highlightEnabled ? "left-7" : "left-1"
               }`}
             />
           </button>
         </div>
-      </section>
+      </Section>
 
       {highlightEnabled && (
-        <section>
-          <div className="mb-2 flex items-center justify-between">
-            <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
-              Frases de destaque
-            </h3>
+        <Section title="Frases de destaque" description="Toque nas palavras ou use IA para detectar" collapsible defaultOpen>
+          <div className="mb-3 flex items-center justify-end">
             <button
               onClick={handleDetect}
               disabled={detecting || words.length === 0}
-              className="flex items-center gap-1 rounded-md bg-accent/10 px-2 py-1 text-xs text-accent hover:bg-accent/20 disabled:opacity-50"
+              className="touch-target flex items-center gap-2 rounded-lg bg-accent/10 px-3 py-2 text-sm font-medium text-accent hover:bg-accent/20 disabled:opacity-50"
             >
-              {detecting ? <Loader2 className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />}
+              {detecting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
               {detecting ? "Detectando..." : "Detectar com IA"}
             </button>
           </div>
-          {error && <p className="mb-2 text-xs text-red-400">{error}</p>}
-          <p className="mb-2 text-xs text-zinc-500">
-            Toque nas palavras — cada destaque mostra 1 ou 2 palavras no tempo exato em que são faladas.
+          {error && <p className="mb-2 text-sm text-red-400">{error}</p>}
+          <p className="mb-3 text-xs text-muted">
+            Cada destaque mostra 1 ou 2 palavras no tempo exato em que são faladas.
             {keywords.length > 0 && (
               <button onClick={clearAll} className="ml-2 underline hover:text-zinc-200">
-                limpar
+                limpar tudo
               </button>
             )}
           </p>
 
           {phrases.length > 0 && (
-            <div className="mb-3 space-y-1.5">
+            <div className="mb-3 space-y-2">
               {phrases.map((ph, i) => (
                 <button
                   key={i}
                   type="button"
                   onClick={() => onPreviewAt?.(ph.start)}
-                  className="w-full rounded-md border border-accent/30 bg-accent/5 px-3 py-2 text-left text-sm font-semibold text-accent transition hover:bg-accent/10"
+                  className="touch-target w-full rounded-lg border border-accent/30 bg-accent/5 px-3 py-2.5 text-left text-sm font-semibold text-accent transition hover:bg-accent/10"
                 >
                   &ldquo;{ph.text}&rdquo;
-                  <span className="ml-2 text-xs font-normal text-zinc-500">
+                  <span className="ml-2 text-xs font-normal text-muted">
                     {ph.start.toFixed(1)}s
                     {onPreviewAt && " · ver no vídeo"}
                   </span>
@@ -147,14 +142,14 @@ export default function HighlightPanel({
             </div>
           )}
 
-          <div className="flex max-h-36 flex-wrap gap-1 overflow-y-auto rounded border border-border bg-panel/50 p-2">
+          <div className="flex max-h-40 flex-wrap gap-1.5 overflow-y-auto rounded-lg border border-border bg-panel/50 p-2">
             {words.map((w, i) => {
               const on = keywords.includes(i);
               return (
                 <button
                   key={i}
                   onClick={() => toggleWord(i)}
-                  className={`rounded px-1.5 py-0.5 text-xs transition ${
+                  className={`min-h-[36px] rounded-md px-2 py-1 text-sm transition ${
                     on
                       ? "bg-accent font-semibold text-bg"
                       : "text-zinc-400 hover:bg-border/50 hover:text-zinc-100"
@@ -165,10 +160,10 @@ export default function HighlightPanel({
               );
             })}
             {words.length === 0 && (
-              <span className="text-xs text-zinc-500">Aguardando transcrição...</span>
+              <span className="text-sm text-muted">Aguardando transcrição...</span>
             )}
           </div>
-        </section>
+        </Section>
       )}
     </div>
   );

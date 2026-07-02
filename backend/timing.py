@@ -68,6 +68,23 @@ def line_visibility_window(group: list[dict]) -> tuple[float, float]:
     return start, max(start + 0.02, end)
 
 
+def non_overlapping_line_windows(
+    groups: list[list[dict]],
+) -> list[tuple[float, float]]:
+    """Visibility windows clamped so consecutive lines never overlap in ASS."""
+    if not groups:
+        return []
+    out: list[tuple[float, float]] = []
+    for i, group in enumerate(groups):
+        start, end = line_visibility_window(group)
+        if i + 1 < len(groups):
+            next_start, _ = line_visibility_window(groups[i + 1])
+            end = min(end, next_start - 0.002)
+        end = max(end, start + 0.01)
+        out.append((start, end))
+    return out
+
+
 def group_words_iter(
     words: list[dict],
     max_words: int,

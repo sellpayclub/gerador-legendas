@@ -29,6 +29,22 @@ import {
 } from "@/lib/api";
 import { useJobEvents } from "@/lib/useJobEvents";
 import { DEFAULT_COMPOSE } from "@/lib/composeDefaults";
+import TabBar from "@/components/ui/TabBar";
+import HintBanner from "@/components/ui/HintBanner";
+
+const EDITOR_TABS = [
+  { id: "template" as const, label: "Template", shortLabel: "Tpl", icon: <LayoutTemplate className="h-4 w-4" /> },
+  { id: "highlight" as const, label: "Destaques", shortLabel: "Dest.", icon: <Zap className="h-4 w-4" /> },
+  { id: "style" as const, label: "Estilo", shortLabel: "Estilo", icon: <Type className="h-4 w-4" /> },
+  { id: "transcript" as const, label: "Transcrição", shortLabel: "Texto", icon: <ScrollText className="h-4 w-4" /> },
+];
+
+const TAB_HINTS: Record<Tab, string> = {
+  template: "Escolha o formato e envie mídia do topo (Choquei, logo, barra).",
+  style: "Ajustes refletem ao vivo no preview — arraste a legenda no vídeo.",
+  highlight: "Opcional — frases grandes no centro do vídeo.",
+  transcript: "Clique numa palavra para ir ao trecho no vídeo.",
+};
 
 const DEFAULT_STYLE: StyleConfig = {
   font: "Roboto",
@@ -424,15 +440,13 @@ export default function EditorPage() {
         </div>
 
         {/* Direita: ajustes com scroll próprio */}
-        <div className="flex min-h-0 w-[340px] shrink-0 flex-col overflow-hidden rounded-xl border border-border bg-panel sm:w-[380px] xl:w-[440px]">
-          <div className="flex shrink-0 border-b border-border">
-            <TabButton active={tab === "template"} onClick={() => setTab("template")} icon={<LayoutTemplate className="h-4 w-4" />} label="Template" />
-            <TabButton active={tab === "highlight"} onClick={() => setTab("highlight")} icon={<Zap className="h-4 w-4" />} label="Destaques" />
-            <TabButton active={tab === "style"} onClick={() => setTab("style")} icon={<Type className="h-4 w-4" />} label="Estilo" />
-            <TabButton active={tab === "transcript"} onClick={() => setTab("transcript")} icon={<ScrollText className="h-4 w-4" />} label="Transcrição" />
-          </div>
+        <div className="flex min-h-0 w-[360px] shrink-0 flex-col overflow-hidden rounded-xl border border-border bg-panel sm:w-[400px] xl:w-[480px]">
+          <TabBar tabs={EDITOR_TABS} active={tab} onChange={setTab} />
 
           <div className="min-h-0 flex-1 overflow-y-auto">
+            <div className="p-4 pb-2">
+              <HintBanner>{TAB_HINTS[tab]}</HintBanner>
+            </div>
             {tab === "template" ? (
               <TemplatePanel
                 jobId={jobId}
@@ -457,7 +471,7 @@ export default function EditorPage() {
                 onKeywordsChange={setKeywords}
               />
             ) : tab === "style" ? (
-              <div className="p-4">
+              <div className="px-4 pb-4">
                 <StylePicker
                   style={style}
                   onChange={setStyle}
@@ -496,7 +510,7 @@ export default function EditorPage() {
             <button
               onClick={handleRender}
               disabled={!wordsData || rendering}
-              className="flex w-full items-center justify-center gap-2 rounded-lg bg-accent px-4 py-3 font-semibold text-bg disabled:opacity-40"
+              className="touch-target flex w-full items-center justify-center gap-2 rounded-xl bg-accent px-4 py-3.5 text-sm font-semibold text-bg transition hover:bg-accent-hover disabled:opacity-40"
             >
               {rendering ? <Loader2 className="h-5 w-5 animate-spin" /> : <Wand2 className="h-5 w-5" />}
               {rendering ? "Renderizando..." : "Renderizar vídeo"}
@@ -552,20 +566,6 @@ function TranscribingOverlay({ stage, pct, active }: { stage: string; pct: numbe
         </p>
       </div>
     </div>
-  );
-}
-
-function TabButton({ active, onClick, icon, label }: { active: boolean; onClick: () => void; icon: React.ReactNode; label: string }) {
-  return (
-    <button
-      onClick={onClick}
-      className={`flex flex-1 items-center justify-center gap-2 px-4 py-3 text-sm font-medium ${
-        active ? "border-b-2 border-accent text-accent" : "text-zinc-400 hover:text-zinc-200"
-      }`}
-    >
-      {icon}
-      {label}
-    </button>
   );
 }
 

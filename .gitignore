@@ -18,6 +18,7 @@ frontend/tsconfig.tsbuildinfo
 !.env.example
 backend/.env
 data/jobs/
+data/app-settings.json
 
 # OS
 .DS_Store

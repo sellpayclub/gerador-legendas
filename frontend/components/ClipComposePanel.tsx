@@ -86,9 +86,9 @@ export default function ClipComposePanel({
             <textarea
               value={clipText ?? ""}
               onChange={(e) => onClipTextChange(e.target.value)}
-              rows={2}
-              placeholder="INVESTIMENTO PARA CURSOS..."
-              className="w-full rounded-md border border-border bg-bg px-3 py-2 text-sm"
+              rows={3}
+              placeholder="Digite o título — Enter para quebrar linha"
+              className="w-full rounded-md border border-border bg-bg px-3 py-2 text-sm leading-snug"
             />
           </Field>
           <Field label="Estilo headline">

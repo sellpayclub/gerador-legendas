@@ -58,6 +58,14 @@ def ensure_ffmpeg() -> None:
         )
 
 
+def ffmpeg_ok() -> bool:
+    try:
+        ensure_ffmpeg()
+        return True
+    except RuntimeError:
+        return False
+
+
 def probe_video(path: Path) -> dict:
     out = subprocess.run(
         [

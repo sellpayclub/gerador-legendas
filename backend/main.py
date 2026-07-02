@@ -7,6 +7,7 @@ import logging
 import os
 import uuid
 from pathlib import Path
+from typing import Optional
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -27,6 +28,8 @@ import enrich
 import clips
 from clip_render import render_clip
 from overlays import ComposeExtras, InstagramHeader
+import app_settings
+from media import ffmpeg_ok
 
 _clip_detect_running: set[str] = set()
 _clip_render_running: set[str] = set()
@@ -66,21 +69,42 @@ def _recover_stale_render_state(job: Job) -> None:
 
 app = FastAPI(title="Legendas Locais")
 
-_origins = [
-    o.strip()
-    for o in os.environ.get(
-        "ALLOWED_ORIGINS",
-        "http://localhost:3000,https://legendas.clonefyia.com",
-    ).split(",")
-    if o.strip()
-]
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=_origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+
+def _cors_origins() -> list[str]:
+    origins = app_settings.get_allowed_origins()
+    if origins and "*" not in origins:
+        return origins
+    return [
+        o.strip()
+        for o in os.environ.get(
+            "ALLOWED_ORIGINS",
+            "http://localhost:3000,https://legendas.clonefyia.com",
+        ).split(",")
+        if o.strip()
+    ]
+
+
+def _configure_cors() -> None:
+    origins = _cors_origins()
+    if app_settings.cors_allow_all() or not origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origin_regex=r"https?://.*",
+            allow_credentials=True,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
+    else:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=origins,
+            allow_credentials=True,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
+
+
+_configure_cors()
 
 
 @app.on_event("startup")
@@ -213,6 +237,7 @@ class ClipsSettingsUpdate(BaseModel):
     ig_avatar_size: int | None = None
     ig_username_size: int | None = None
     ig_caption_size: int | None = None
+    format_presets: dict | None = None
 
 
 class ClipWordsUpdate(BaseModel):
@@ -484,7 +509,71 @@ def _sync_render_one_clip(
 
 @app.get("/api/health")
 async def health() -> dict:
-    return {"ok": True}
+    s = app_settings.get()
+    return {
+        "ok": True,
+        "openai_configured": s.openai_configured(),
+        "transcribe_engine": s.transcribe_engine,
+        "transcribe_ready": s.transcribe_ready(),
+        "ffmpeg_ok": ffmpeg_ok(),
+    }
+
+
+class SettingsUpdate(BaseModel):
+    llm_provider: Optional[str] = None
+    openai_api_key: Optional[str] = None
+    openai_base_url: Optional[str] = None
+    transcribe_engine: Optional[str] = None
+    openai_model: Optional[str] = None
+    clips_model: Optional[str] = None
+    keywords_model: Optional[str] = None
+    enrich_model: Optional[str] = None
+    allowed_origins: Optional[list[str]] = None
+    public_domain: Optional[str] = None
+
+
+class SettingsTestBody(BaseModel):
+    openai_api_key: Optional[str] = None
+
+
+@app.get("/api/settings")
+async def get_settings_route() -> dict:
+    return app_settings.to_public()
+
+
+@app.put("/api/settings")
+async def put_settings_route(body: SettingsUpdate) -> dict:
+    patch = body.model_dump(exclude_unset=True)
+    app_settings.save(patch)
+    return app_settings.to_public()
+
+
+@app.post("/api/settings/test")
+async def test_settings_route(body: SettingsTestBody | None = None) -> dict:
+    import requests
+    from openai_chat import build_chat_payload
+
+    key = (body.openai_api_key if body and body.openai_api_key else app_settings.get().openai_api_key).strip()
+    if not key or key.startswith("••"):
+        raise HTTPException(400, "Informe uma API key válida para testar")
+    url = app_settings.get_openai_chat_url()
+    model = app_settings.get_clips_model()
+    try:
+        resp = requests.post(
+            url,
+            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+            json=build_chat_payload(
+                model,
+                [{"role": "user", "content": "Responda apenas: ok"}],
+                max_tokens=16,
+            ),
+            timeout=30,
+        )
+        if resp.status_code != 200:
+            return {"ok": False, "message": resp.text[:300]}
+        return {"ok": True, "message": "Conexão com OpenAI OK"}
+    except Exception as exc:
+        return {"ok": False, "message": str(exc)}
 
 
 @app.get("/api/presets")
@@ -900,6 +989,8 @@ async def _run_render(job: Job, body: RenderRequest) -> None:
 
         job.update(Stage.GENERATING_ASS, 0.0, "Gerando legendas ASS")
         data = json.loads(job.words_path.read_text(encoding="utf-8"))
+        from timing import trim_word_ends
+        data["words"] = trim_word_ends(data.get("words", []))
         # When a template is active, the ASS canvas matches the template (e.g.
         # 1080x1920) so subtitle \pos coordinates line up with the composed
         # output. Otherwise we use the probed input dims as before.
@@ -1024,7 +1115,7 @@ async def _run_clip_detect(job: Job) -> None:
         words = data.get("words", [])
         lang = job.language if job.language and job.language != "auto" else "auto"
         clips.mark_detecting(job.job_dir())
-        job.update(message="Detectando cortes com IA (pode levar 1–2 min)...")
+        job.update(message="Detectando cortes com IA (vídeos longos podem levar 5–15 min)...")
         result = await asyncio.to_thread(
             clips.detect_clips, words, job.job_dir(),
             duration=job.duration, language=lang, force=True,
@@ -1036,6 +1127,7 @@ async def _run_clip_detect(job: Job) -> None:
         job.update(message=f"Falha ao detectar cortes: {e}")
     finally:
         _clip_detect_running.discard(job_id)
+        clips.clear_detecting(job.job_dir())
 
 
 @app.get("/api/jobs/{job_id}/clips")
@@ -1047,10 +1139,10 @@ async def get_clips_route(job_id: str) -> dict:
     detecting = job_id in _clip_detect_running
     if not data:
         return {"clips": [], "manual": False, "detecting": detecting, "detect_error": None}
-    if detecting:
-        data["detecting"] = True
-    else:
-        data.setdefault("detecting", False)
+    if not detecting and data.get("detecting"):
+        clips.clear_detecting(job.job_dir())
+        data = clips.load_clips(job.job_dir()) or data
+    data["detecting"] = detecting
     data.setdefault("detect_error", None)
     return data
 
