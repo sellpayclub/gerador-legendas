@@ -15,10 +15,13 @@ dependencies = [
     "requests>=2.31",
     "python-dotenv>=1.0",
     "pillow>=10.0",
+    "PyJWT>=2.8",
+    "cryptography>=42.0",
+    "resend>=2.21.0",
 ]
 
 [project.optional-dependencies]
 dev = ["ruff>=0.4"]
 
 [tool.setuptools]
-py-modules = ["main", "transcribe", "ass_gen", "render", "jobs", "presets", "media", "fonts_util", "timing", "effects", "keywords", "compose", "templates", "overlays", "enrich", "clips", "clip_render"]
+py-modules = ["main", "transcribe", "ass_gen", "render", "jobs", "presets", "media", "fonts_util", "timing", "effects", "keywords", "compose", "templates", "overlays", "enrich", "clips", "clip_render", "auth", "tenant", "deps", "routes_me", "user_secrets", "supabase_client", "crypto_util", "db_jobs", "cakto_webhook", "purchase_email", "request_context"]

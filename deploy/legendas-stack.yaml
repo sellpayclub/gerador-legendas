@@ -1,13 +1,9 @@
 version: "3.7"
 services:
-
   legendas-proxy:
     image: nginx:alpine
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    # Bind-mount the conf from the repo path on the host so config changes are
-    # picked up on redeploy (Docker Swarm `configs` are immutable and block
-    # updates when the content changes).
     volumes:
       - /opt/legendas-locais/deploy/legendas-nginx.conf:/etc/nginx/conf.d/default.conf:ro
     networks:
@@ -19,17 +15,14 @@ services:
         constraints: [node.role == manager]
       labels:
         - "traefik.enable=true"
-        - "traefik.http.routers.legendas.rule=Host(`legendas.clonefyia.com`)"
+        - "traefik.http.routers.legendas.rule=Host(`app.clipsaas.site`)"
         - "traefik.http.routers.legendas.entrypoints=websecure"
         - "traefik.http.routers.legendas.tls.certresolver=letsencryptresolver"
         - "traefik.http.routers.legendas.service=legendas"
         - "traefik.http.services.legendas.loadbalancer.server.port=80"
-        - "traefik.http.middlewares.legendas-upload-buffer.buffering.maxRequestBodyBytes=2147483648"
-        - "traefik.http.middlewares.legendas-upload-buffer.buffering.memRequestBodyBytes=104857600"
-        - "traefik.http.routers.legendas.middlewares=legendas-upload-buffer"
+        - "traefik.http.services.legendas.loadbalancer.responseForwarding.flushInterval=100ms"
         - "traefik.docker.network=clonefy"
         - "traefik.http.routers.legendas.priority=1"
-
 networks:
   clonefy:
     external: true

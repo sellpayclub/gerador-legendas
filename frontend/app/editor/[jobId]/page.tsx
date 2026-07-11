@@ -29,6 +29,7 @@ import {
 } from "@/lib/api";
 import { useJobEvents } from "@/lib/useJobEvents";
 import { DEFAULT_COMPOSE } from "@/lib/composeDefaults";
+import { STATIC_TEMPLATES } from "@/lib/staticTemplates";
 import TabBar from "@/components/ui/TabBar";
 import HintBanner from "@/components/ui/HintBanner";
 
@@ -90,7 +91,7 @@ export default function EditorPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   // Template / composition state
-  const [templates, setTemplates] = useState<TemplateInfo[]>([]);
+  const [templates, setTemplates] = useState<TemplateInfo[]>(STATIC_TEMPLATES);
   const [resolutions, setResolutions] = useState<ResolutionInfo[]>([]);
   const [selectedTemplate, setSelectedTemplate] = useState<string | null>(null);
   const [resolution, setResolution] = useState<"480p" | "720p" | "1080p">("1080p");
@@ -102,8 +103,14 @@ export default function EditorPage() {
   const [rendering, setRendering] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
 
-  const videoControlsRef = useRef<{ seek: (t: number) => void; getCurrentTime: () => number } | null>(null);
+  const videoControlsRef = useRef<{
+    seek: (t: number, opts?: { play?: boolean }) => void;
+    play: () => void;
+    pause: () => void;
+    getCurrentTime: () => number;
+  } | null>(null);
   const retriedTranscribe = useRef(false);
+  const renderStartedHere = useRef(false);
 
   // Load template list once.
   useEffect(() => {
@@ -223,12 +230,14 @@ export default function EditorPage() {
     }
     if (liveJob?.stage === "rendering" || liveJob?.stage === "generating_ass") {
       setRendering(true);
-      // Only follow a render that was started in THIS editing session, so
-      // returning to a finished job lets the user keep editing instead of
-      // being bounced to the render screen.
-      router.push(`/render/${jobId}`);
+      if (renderStartedHere.current && liveJob.mode !== "cortes") {
+        router.push(`/render/${jobId}`);
+      }
     }
-  }, [liveJob?.stage, liveJob?.has_words, liveJob?.message, jobId, words.length, router]);
+    if (liveJob?.stage === "done" || liveJob?.stage === "error" || liveJob?.stage === "transcribed") {
+      renderStartedHere.current = false;
+    }
+  }, [liveJob?.stage, liveJob?.has_words, liveJob?.message, liveJob?.mode, jobId, words.length, router]);
 
   // Fallback: refresh words when background punctuation finishes (SSE can miss updates).
   useEffect(() => {
@@ -272,6 +281,8 @@ export default function EditorPage() {
       ...c,
       overlay_pos_x: 0.5,
       overlay_pos_y: 0.5,
+      video_pos_x: 0.5,
+      video_pos_y: 0.5,
       ...(id.startsWith("choquei_") ? {} : { headline_text: null }),
     }));
   }, []);
@@ -292,6 +303,7 @@ export default function EditorPage() {
       return;
     }
     setRendering(true);
+    renderStartedHere.current = true;
     try {
       await saveWords(jobId, words);
       if (highlightEnabled) {
@@ -349,6 +361,12 @@ export default function EditorPage() {
     [words, keywords, highlightEnabled],
   );
 
+  /** Canvas do template ativo — legenda é posicionada nesse espaço, não no vídeo fonte. */
+  const activeTemplateInfo = useMemo(
+    () => (selectedTemplate ? templates.find((t) => t.id === selectedTemplate) ?? null : null),
+    [selectedTemplate, templates],
+  );
+
   if (loading) {
     return (
       <div className="flex h-[60vh] items-center justify-center">
@@ -399,7 +417,7 @@ export default function EditorPage() {
                 template={templates.find(t => t.id === selectedTemplate)!}
                 overlayAsset={overlayAsset}
                 words={words}
-                style={style}
+                style={{ ...style, pos_x: position.x, pos_y: position.y }}
                 wordsPerLine={wordsPerLine}
                 currentTime={currentTime}
                 duration={job?.duration}
@@ -410,6 +428,10 @@ export default function EditorPage() {
                 compose={compose}
                 onLogoPosChange={(p) => setCompose((c) => ({ ...c, logo_x: p.x, logo_y: p.y }))}
                 onOverlayPosChange={(p) => setCompose((c) => ({ ...c, overlay_pos_x: p.x, overlay_pos_y: p.y }))}
+                onSubtitlePositionChange={(pos) => {
+                  setPosition(pos);
+                  setStyle((s) => ({ ...s, pos_x: pos.x, pos_y: pos.y }));
+                }}
                 registerControls={(c) => (videoControlsRef.current = c)}
               />
             ) : job && (
@@ -426,6 +448,7 @@ export default function EditorPage() {
                 compact
                 highlightEnabled={highlightEnabled}
                 highlightPhrases={highlightPhrases}
+                compose={compose}
                 registerControls={(c) => (videoControlsRef.current = c)}
               />
             )}
@@ -477,8 +500,8 @@ export default function EditorPage() {
                   onChange={setStyle}
                   wordsPerLine={wordsPerLine}
                   onWordsPerLineChange={setWordsPerLine}
-                  videoHeight={job?.height ?? 1920}
-                  videoWidth={job?.width ?? 1080}
+                  videoHeight={activeTemplateInfo?.height ?? job?.height ?? 1920}
+                  videoWidth={activeTemplateInfo?.width ?? job?.width ?? 1080}
                   position={position}
                   onPositionChange={setPosition}
                 />

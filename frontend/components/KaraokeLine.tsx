@@ -29,19 +29,28 @@ function buildWordNodes(words: Word[], style: StyleConfig, activeIndex: number):
     const label = wordLabel(w, style.text_case);
     if (!label) return;
     const isActive = i === activeIndex;
+    const anim = style.animation ?? "pop";
+    const scaled = anim === "pop" || anim === "bounce";
     nodes.push({
       key: i,
       label,
       color: isActive ? style.primary_color : style.secondary_color,
       spanStyle: {
         marginRight: i === words.length - 1 ? 0 : `${wordGapEm}em`,
-        display: isActive && style.animation === "pop" ? "inline-block" : "inline",
+        display: isActive && scaled ? "inline-block" : "inline",
         transform:
-          isActive && style.animation === "pop"
+          isActive && scaled
             ? `scale(${style.pop_scale / 100})`
-            : undefined,
+            : isActive && anim === "slide"
+              ? "translateY(0)"
+              : anim === "slide"
+                ? "translateY(3px)"
+                : undefined,
+        opacity: isActive && anim === "fade" ? 1 : anim === "fade" && !isActive ? 0.72 : undefined,
         transition:
-          isActive && style.animation === "pop" ? "transform 80ms ease-out" : undefined,
+          isActive && (scaled || anim === "slide" || anim === "fade")
+            ? "transform 120ms ease-out, opacity 120ms ease-out"
+            : undefined,
       },
     });
   });

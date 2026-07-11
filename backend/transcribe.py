@@ -102,15 +102,18 @@ def _transcribe_openai_chunked(
     all_words: list[dict] = []
     n = len(chunks)
 
-    for i, (chunk_path, offset) in enumerate(chunks):
+    import concurrent.futures
+
+    def _process_chunk(args: tuple[int, tuple[Path, float]]) -> list[dict]:
+        i, (chunk_path, offset) = args
         if on_progress:
-            on_progress(
-                i / max(n, 1),
-                f"Transcrevendo parte {i + 1}/{n}...",
-            )
+            on_progress(i / max(n, 1), f"Transcrevendo parte {i + 1}/{n}...")
         data = _call_openai_transcribe(chunk_path, language)
-        words = _extract_openai_words(data, time_offset=offset)
-        all_words.extend(words)
+        return _extract_openai_words(data, time_offset=offset)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+        for words in executor.map(_process_chunk, enumerate(chunks)):
+            all_words.extend(words)
 
     payload = _payload_with_dims({
         "duration": duration or (all_words[-1]["end"] if all_words else 0.0),

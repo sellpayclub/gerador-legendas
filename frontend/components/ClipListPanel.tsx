@@ -2,19 +2,34 @@
 
 import { useState } from "react";
 import { ChevronDown, ChevronUp, Loader2, Play, Sparkles, Trash2 } from "lucide-react";
-import type { ClipSegment } from "@/lib/api";
+import type { ClipFocusType, ClipSegment } from "@/lib/api";
 import IconButton from "@/components/ui/IconButton";
+
+export const CLIP_FOCUS_OPTIONS: { id: ClipFocusType; label: string; desc: string }[] = [
+  { id: "viral", label: "Viral", desc: "Ganchos fortes, apelo amplo (padrão)" },
+  { id: "polemico", label: "Polêmicos", desc: "Opiniões fortes, debate" },
+  { id: "engracado", label: "Engraçados", desc: "Humor, punchlines" },
+  { id: "valioso", label: "Conteúdo valioso", desc: "Educativo, dicas práticas" },
+  { id: "inspirador", label: "Inspirador", desc: "Motivação, mindset" },
+  { id: "choque", label: "Choque", desc: "Fatos surpreendentes" },
+];
 
 type Props = {
   clips: ClipSegment[];
   activeId: string | null;
   detecting: boolean;
+  transcribing?: boolean;
   onDetect: () => void;
   onSelect: (id: string) => void;
   onToggle: (id: string) => void;
   onRemove: (id: string) => void;
   onPreview: (clip: ClipSegment) => void;
   onReorder: (id: string, direction: "up" | "down") => void;
+  /** Focos editoriais selecionados antes de detectar (multi-seleção). */
+  focuses?: ClipFocusType[];
+  onFocusesChange?: (focuses: ClipFocusType[]) => void;
+  /** Esconder o seletor depois da primeira detecção (quando já há cortes). */
+  showFocusPicker?: boolean;
 };
 
 function fmtDuration(s: number): string {
@@ -27,14 +42,40 @@ export default function ClipListPanel({
   clips,
   activeId,
   detecting,
+  transcribing = false,
   onDetect,
   onSelect,
   onToggle,
   onRemove,
   onPreview,
   onReorder,
+  focuses = [],
+  onFocusesChange,
+  showFocusPicker = true,
 }: Props) {
+  const [focusOpen, setFocusOpen] = useState(false);
   const enabledCount = clips.filter((c) => c.enabled).length;
+  const focusDisabled = detecting || transcribing;
+  const selectedLabels = CLIP_FOCUS_OPTIONS
+    .filter((o) => focuses.includes(o.id) && o.id !== "viral")
+    .map((o) => o.label);
+  const summary =
+    selectedLabels.length > 0
+      ? selectedLabels.join(", ")
+      : "Viral (padrão)";
+
+  const toggleFocus = (id: ClipFocusType) => {
+    if (!onFocusesChange) return;
+    if (id === "viral") {
+      // viral é o padrão implícito — limpa os outros quando selecionado
+      onFocusesChange([]);
+      return;
+    }
+    const next = focuses.includes(id)
+      ? focuses.filter((f) => f !== id)
+      : [...focuses.filter((f) => f !== "viral"), id];
+    onFocusesChange(next);
+  };
 
   return (
     <div className="flex flex-col gap-3 p-4">
@@ -48,7 +89,8 @@ export default function ClipListPanel({
         <button
           type="button"
           onClick={onDetect}
-          disabled={detecting}
+          disabled={detecting || transcribing}
+          title={transcribing ? "Aguarde a transcrição terminar" : undefined}
           className="touch-target flex shrink-0 items-center gap-2 rounded-lg bg-accent/10 px-3 py-2 text-sm font-medium text-accent transition hover:bg-accent/20 disabled:opacity-50"
         >
           {detecting ? (
@@ -59,6 +101,52 @@ export default function ClipListPanel({
           {detecting ? "Detectando..." : "Detectar com IA"}
         </button>
       </div>
+
+      {showFocusPicker && (
+        <div className="rounded-lg border border-border bg-panel/50 p-2.5">
+          <button
+            type="button"
+            onClick={() => setFocusOpen((v) => !v)}
+            disabled={focusDisabled}
+            className="flex w-full items-center justify-between gap-2 rounded px-1 py-1 text-left text-xs text-zinc-300 transition hover:text-zinc-100 disabled:opacity-50"
+          >
+            <span>
+              <span className="text-zinc-500">Foco dos cortes: </span>
+              <span className="font-medium text-zinc-100">{summary}</span>
+            </span>
+            {focusOpen ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+          </button>
+          {focusOpen && (
+            <div className="mt-2 grid grid-cols-1 gap-1.5 sm:grid-cols-2">
+              {CLIP_FOCUS_OPTIONS.map((opt) => {
+                const active =
+                  opt.id === "viral" ? focuses.length === 0 : focuses.includes(opt.id);
+                return (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    disabled={focusDisabled}
+                    onClick={() => toggleFocus(opt.id)}
+                    className={`rounded-lg border px-2.5 py-2 text-left text-xs transition disabled:opacity-50 ${
+                      active
+                        ? "border-accent bg-accent/10 text-accent"
+                        : "border-border text-zinc-400 hover:text-zinc-200"
+                    }`}
+                  >
+                    <span className="block font-medium">{opt.label}</span>
+                    <span className="mt-0.5 block text-[10px] opacity-70">{opt.desc}</span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+          {!focusOpen && selectedLabels.length === 0 && (
+            <p className="mt-1 px-1 text-[10px] text-zinc-500">
+              Toque para escolher polêmicos, engraçados, conteúdo valioso e mais. Pode combinar vários.
+            </p>
+          )}
+        </div>
+      )}
 
       {clips.length === 0 && !detecting && (
         <p className="rounded-lg border border-dashed border-border bg-panel/50 px-4 py-6 text-center text-xs text-zinc-500">

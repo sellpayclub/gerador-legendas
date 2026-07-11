@@ -9,6 +9,8 @@ from enum import Enum
 from pathlib import Path
 from typing import AsyncIterator, Optional
 
+from tenant import is_multi_tenant, job_max_age_hours
+
 ROOT = Path(__file__).resolve().parent.parent / "data" / "jobs"
 
 
@@ -70,6 +72,7 @@ class Job:
     fps: float = 30.0
     duration: float = 0.0
     filename: str = ""
+    user_id: Optional[str] = None
     language: str = "auto"
     # SSE subscribers
     _subs: list[asyncio.Queue] = field(default_factory=list)
@@ -83,6 +86,7 @@ class Job:
     def to_dict(self) -> dict:
         meta = _read_meta(self.job_dir())
         clips_data = _read_clips_meta(self.job_dir())
+        job_dir = self.job_dir()
         return {
             "id": self.id,
             "stage": self.stage.value,
@@ -98,6 +102,8 @@ class Job:
             "mode": meta.get("mode", "legendas"),
             "clips_ready": bool(clips_data.get("clips")),
             "clip_count": len(clips_data.get("clips") or []),
+            "created_at": self.created_at,
+            "updated_at": _dir_last_activity(job_dir),
         }
 
     def update(self, stage: Optional[Stage] = None, progress: Optional[float] = None,
@@ -131,8 +137,14 @@ def get_job(job_id: str) -> Optional[Job]:
     return _STORE.get(job_id)
 
 
-def create_job(job_id: str, filename: str, *, mode: str = "legendas") -> Job:
-    job = Job(id=job_id, filename=filename)
+def create_job(
+    job_id: str,
+    filename: str,
+    *,
+    mode: str = "legendas",
+    user_id: Optional[str] = None,
+) -> Job:
+    job = Job(id=job_id, filename=filename, user_id=user_id)
     try:
         job._loop = asyncio.get_running_loop()
     except RuntimeError:
@@ -144,26 +156,43 @@ def create_job(job_id: str, filename: str, *, mode: str = "legendas") -> Job:
     job.ass_path = d / "captions.ass"
     job.output_path = d / "output.mp4"
     try:
-        save_meta(d, filename=filename, mode=mode)
+        save_meta(
+            d,
+            filename=filename,
+            mode=mode,
+            user_id=user_id,
+            created_at=job.created_at,
+        )
     except Exception:
         pass
     _STORE[job_id] = job
     return job
 
 
-def list_jobs() -> list[Job]:
-    return sorted(_STORE.values(), key=lambda j: -j.created_at)
+def list_jobs(user_id: Optional[str] = None) -> list[Job]:
+    items = _STORE.values()
+    if user_id is not None:
+        items = [j for j in items if j.user_id == user_id]
+    return sorted(items, key=lambda j: -j.created_at)
 
 
 def delete_job(job_id: str) -> bool:
     """Remove a job from the store and delete its files on disk.
     Returns True if a directory or store entry was removed."""
     import shutil
+
     removed = _STORE.pop(job_id, None) is not None
     d = ROOT / job_id
     if d.exists() and d.is_dir():
         shutil.rmtree(d, ignore_errors=True)
         removed = True
+    if is_multi_tenant():
+        try:
+            from db_jobs import unregister_job
+
+            unregister_job(job_id)
+        except Exception:
+            pass
     return removed
 
 
@@ -196,8 +225,11 @@ def rehydrate_jobs() -> None:
             except Exception:
                 pass
         video = inputs[0] if inputs else None
+        meta_data = _read_meta(d)
         job = Job(id=job_id, filename=filename)
-        job.created_at = d.stat().st_mtime
+        job.user_id = meta_data.get("user_id")
+        created = meta_data.get("created_at")
+        job.created_at = float(created) if created else d.stat().st_mtime
         job.video_path = video
         job.audio_path = d / "audio.mp3"
         if not job.audio_path.exists() and (d / "audio.wav").exists():
@@ -287,14 +319,38 @@ def _dir_last_activity(d: Path) -> float:
     return latest
 
 
-def cleanup_old_jobs(max_age_hours: float = 12.0) -> None:
+def _job_created_at(job_dir: Path) -> float:
+    meta = _read_meta(job_dir)
+    raw = meta.get("created_at")
+    if raw is not None:
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            pass
+    return job_dir.stat().st_mtime
+
+
+def cleanup_old_jobs(max_age_hours: Optional[float] = None) -> None:
     """Delete job directories (videos included) older than max_age_hours so the
     VPS doesn't accumulate uploaded/rendered videos."""
-    cutoff = time.time() - max_age_hours * 3600
+    hours = job_max_age_hours() if max_age_hours is None else max_age_hours
+    if not is_multi_tenant() and max_age_hours is None:
+        hours = 12.0
+    cutoff = time.time() - hours * 3600
     if not ROOT.exists():
         return
     import shutil
     for d in ROOT.iterdir():
-        if d.is_dir() and _dir_last_activity(d) < cutoff:
+        if not d.is_dir():
+            continue
+        age_ts = _job_created_at(d)
+        if age_ts < cutoff:
             shutil.rmtree(d, ignore_errors=True)
             _STORE.pop(d.name, None)
+            if is_multi_tenant():
+                try:
+                    from db_jobs import unregister_job
+
+                    unregister_job(d.name)
+                except Exception:
+                    pass

@@ -180,7 +180,6 @@ def settings_source() -> str:
 def to_public(settings: Optional[Settings] = None) -> dict[str, Any]:
     s = settings or get()
     return {
-        "llm_provider": s.llm_provider,
         "openai_api_key_masked": mask_api_key(s.openai_api_key),
         "openai_api_key_set": s.openai_configured(),
         "openai_base_url": s.openai_base_url or "",
@@ -189,8 +188,6 @@ def to_public(settings: Optional[Settings] = None) -> dict[str, Any]:
         "clips_model": s.clips_model,
         "keywords_model": s.keywords_model,
         "enrich_model": s.enrich_model,
-        "allowed_origins": list(s.allowed_origins),
-        "public_domain": s.public_domain,
         "configured": s.openai_configured(),
         "transcribe_ready": s.transcribe_ready(),
         "warnings": s.warnings(),
@@ -240,6 +237,23 @@ def save(patch: dict[str, Any]) -> Settings:
 
 
 def get_openai_api_key() -> str:
+    from tenant import is_multi_tenant
+
+    if is_multi_tenant():
+        from request_context import get_current_user_id
+        from user_secrets import get_user_openai_key
+
+        uid = get_current_user_id()
+        if not uid:
+            raise RuntimeError(
+                "OpenAI não configurada. Faça login e adicione sua API key em Configurações."
+            )
+        key = get_user_openai_key(uid)
+        if not key:
+            raise RuntimeError(
+                "OpenAI não configurada. Abra Configurações e adicione sua API key."
+            )
+        return key
     key = (get().openai_api_key or "").strip()
     if not key:
         raise RuntimeError(

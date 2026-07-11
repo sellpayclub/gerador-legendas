@@ -49,7 +49,7 @@ def ensure_ffmpeg() -> None:
     # Confirm libass support
     out = subprocess.run(
         [ffmpeg_bin(), "-hide_banner", "-filters"],
-        capture_output=True, text=True,
+        capture_output=True, text=True, timeout=30,
     )
     if " ass " not in out.stdout:
         raise RuntimeError(
@@ -72,7 +72,7 @@ def probe_video(path: Path) -> dict:
             ffprobe_bin(), "-v", "error", "-print_format", "json",
             "-show_format", "-show_streams", str(path),
         ],
-        capture_output=True, text=True, check=True,
+        capture_output=True, text=True, check=True, timeout=60,
     )
     data = json.loads(out.stdout)
     streams = data.get("streams", [])
@@ -81,10 +81,12 @@ def probe_video(path: Path) -> dict:
     fmt = data.get("format", {})
     fps = 30.0
     if vs.get("r_frame_rate"):
-        num, den = vs["r_frame_rate"].split("/")
+        parts = vs["r_frame_rate"].split("/")
         try:
-            fps = float(num) / float(den) if float(den) else 30.0
-        except ValueError:
+            num = float(parts[0])
+            den = float(parts[1]) if len(parts) > 1 else 1.0
+            fps = num / den if den else 30.0
+        except (ValueError, ZeroDivisionError):
             pass
     w = int(vs.get("width", 1920))
     h = int(vs.get("height", 1080))
@@ -131,7 +133,7 @@ def extract_audio(video: Path, out_path: Path) -> None:
             "-c:a", "pcm_s16le",
             str(out_path),
         ]
-    proc = subprocess.run(cmd, capture_output=True, text=True)
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
     if proc.returncode != 0:
         raise RuntimeError(f"ffmpeg extract audio failed: {proc.stderr[-600:]}")
 
@@ -158,7 +160,7 @@ def split_audio_chunks(
             "-c:a", "libmp3lame", "-b:a", "48k", "-ar", "16000", "-ac", "1",
             str(pattern),
         ],
-        capture_output=True, text=True,
+        capture_output=True, text=True, timeout=300,
     )
     if proc.returncode != 0:
         raise RuntimeError(f"ffmpeg split audio failed: {proc.stderr[-600:]}")
@@ -186,3 +188,19 @@ def parse_progress(line: str, total_duration: float) -> float | None:
         return max(0.0, min(1.0, secs / total_duration))
     except (ValueError, IndexError):
         return None
+
+
+def escape_filter_path(path: str) -> str:
+    r"""Escape a file path for use inside ffmpeg -filter_complex strings.
+
+    Handles characters that break ffmpeg filter syntax: ``\ ' : , ; [ ] % "``.
+    POSIX paths rarely contain these, but uploaded filenames with special chars
+    will otherwise cause filter parsing failures.
+    """
+    out: list[str] = []
+    for ch in path:
+        if ch in r"\\':,;[]%\"":
+            out.append("\\" + ch)
+        else:
+            out.append(ch)
+    return "".join(out)

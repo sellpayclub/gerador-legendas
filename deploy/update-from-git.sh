@@ -22,6 +22,6 @@ bash "$APP_DIR/deploy/setup.sh" --update
 
 echo "==> health check..."
 curl -sf http://127.0.0.1:8000/api/health
-curl -sf -o /dev/null "https://${DOMAIN:-legendas.clonefyia.com}/api/health" || true
+curl -sf -o /dev/null "https://${DOMAIN:-app.clipsaas.site}/api/health" || true
 echo ""
-echo "OK: https://${DOMAIN:-legendas.clonefyia.com}"
+echo "OK: https://${DOMAIN:-app.clipsaas.site}"

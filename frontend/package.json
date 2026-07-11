@@ -5,16 +5,19 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "postbuild": "mkdir -p .next/standalone/.next && cp -r .next/static .next/standalone/.next/static && rm -rf .next/standalone/public && cp -r public .next/standalone/public",
+    "postbuild": "mkdir -p .next/standalone/.next && (cp -r .next/static .next/standalone/.next/static || true) && (cp -r .next/server .next/standalone/.next/server || true) && rm -rf .next/standalone/public && (cp -r public .next/standalone/public || true)",
     "start": "bash scripts/start-prod.sh",
     "lint": "next lint"
   },
   "dependencies": {
+    "@supabase/ssr": "^0.6.1",
+    "@supabase/supabase-js": "^2.49.1",
     "next": "14.2.33",
     "react": "18.3.1",
     "react-dom": "18.3.1",
     "clsx": "2.1.1",
-    "lucide-react": "0.408.0"
+    "lucide-react": "0.408.0",
+    "sharp": "^0.33.5"
   },
   "devDependencies": {
     "@types/node": "20.14.10",

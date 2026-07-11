@@ -1,5 +1,6 @@
 import type { ComposeSettings, ExportFormatId, StyleConfig, TemplateInfo } from "@/lib/api";
 import { defaultPositionForTemplate, templateForFormat } from "@/components/ClipFormatPicker";
+import { clampSubtitlePosition } from "@/lib/subtitlePosition";
 
 /** Settings that vary by export format (restored when switching back). */
 export type CortesFormatSnapshot = {
@@ -53,6 +54,35 @@ export function defaultSnapshotForFormat(
 export function parseFormatPresets(raw: unknown): CortesFormatPresets {
   if (!raw || typeof raw !== "object") return {};
   return raw as CortesFormatPresets;
+}
+
+export function canvasSizeForFormat(
+  fmt: ExportFormatId,
+  templates: TemplateInfo[],
+  videoWidth: number,
+  videoHeight: number,
+): { width: number; height: number } {
+  const tplId = templateForFormat(fmt);
+  const tpl = tplId ? templates.find((t) => t.id === tplId) ?? null : null;
+  if (tpl) return { width: tpl.width, height: tpl.height };
+  if (fmt === "reels_full" || fmt === "choquei_image" || fmt === "choquei_video") {
+    return { width: 1080, height: 1920 };
+  }
+  return { width: videoWidth, height: videoHeight };
+}
+
+export function clampSnapshotPosition(
+  snap: CortesFormatSnapshot,
+  width: number,
+  height: number,
+  marginV: number,
+): CortesFormatSnapshot {
+  const clamped = clampSubtitlePosition(snap.position, width, height, marginV);
+  return {
+    ...snap,
+    position: clamped,
+    stylePos: { pos_x: clamped.x, pos_y: clamped.y },
+  };
 }
 
 /** Apply a stored snapshot to React state setters. */

@@ -1,7 +1,25 @@
 /** Shared compose layout metrics — preview must mirror backend/overlays.py. */
 
+const EMOJI_RE =
+  /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{1F900}-\u{1F9FF}\u{1F1E0}-\u{1F1FF}\u{FE00}-\u{FE0F}\u{200D}]/gu;
+
+function upperNonEmojiSegment(text: string): string {
+  let out = "";
+  let last = 0;
+  for (const m of text.matchAll(EMOJI_RE)) {
+    const idx = m.index ?? 0;
+    if (idx > last) out += text.slice(last, idx).toUpperCase();
+    out += m[0];
+    last = idx + m[0].length;
+  }
+  return out + text.slice(last).toUpperCase();
+}
+
 export const HEADLINE_BORDER_BOLD = 24;
 export const HEADLINE_BORDER_SIMPLE = 8;
+/** Subtle corner radius — preview must mirror backend/overlays.py headline_box_radius. */
+export const HEADLINE_RADIUS_BOLD = 14;
+export const HEADLINE_RADIUS_SIMPLE = 10;
 export const PROGRESS_HEIGHT_MIN = 0.02;
 export const PROGRESS_HEIGHT_MAX = 0.12;
 
@@ -11,6 +29,11 @@ export function headlineFontSize(size?: number): number {
 
 export function headlineBoxBorder(style?: string): number {
   return style === "bold_red" ? HEADLINE_BORDER_BOLD : HEADLINE_BORDER_SIMPLE;
+}
+
+export function headlineBorderRadius(style?: string, scale = 1): number {
+  const base = style === "bold_red" ? HEADLINE_RADIUS_BOLD : HEADLINE_RADIUS_SIMPLE;
+  return Math.max(4, Math.round(base * scale));
 }
 
 export function clampProgressHeightPct(pct?: number): number {
@@ -23,10 +46,11 @@ export function progressBarHeightPx(canvasH: number, pct?: number): number {
   return Math.max(1, Math.round(canvasH * clampProgressHeightPct(pct)));
 }
 
-/** Headline display text — preserve user line breaks; only apply case style. */
+/** Headline display text — preserve line breaks; uppercase only non-emoji (bold_red). */
 export function headlineDisplayText(text: string, style?: string): string {
   const normalized = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-  return style === "bold_red" ? normalized.toUpperCase() : normalized;
+  if (style !== "bold_red") return normalized;
+  return normalized.split("\n").map(upperNonEmojiSegment).join("\n");
 }
 
 /** Same clamp as backend/overlays.py (50–100% of canvas width). */
@@ -48,7 +72,7 @@ export function layoutHeadlineLines(
   const ctx = canvas.getContext("2d");
   if (!ctx) return text.split("\n");
 
-  ctx.font = `700 ${fontSizePx}px Roboto, sans-serif`;
+  ctx.font = `700 ${fontSizePx}px Roboto, "Noto Color Emoji", sans-serif`;
   const measure = (s: string) => ctx.measureText(s || " ").width;
 
   const normalized = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");

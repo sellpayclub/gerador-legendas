@@ -5,11 +5,12 @@ import asyncio
 import json
 import logging
 import os
+import time
 import uuid
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
@@ -30,6 +31,14 @@ from clip_render import render_clip
 from overlays import ComposeExtras, InstagramHeader
 import app_settings
 from media import ffmpeg_ok
+from auth import UserContext
+from deps import mt_active_user, mt_active_user_media, mt_openai_user, resolve_job
+from request_context import set_current_user_id, user_api_context
+from tenant import is_multi_tenant
+from routes_me import router as hosted_router
+from routes_admin import router as admin_router
+
+log = logging.getLogger("legendas.main")
 
 _clip_detect_running: set[str] = set()
 _clip_render_running: set[str] = set()
@@ -68,6 +77,23 @@ def _recover_stale_render_state(job: Job) -> None:
         clips.update_clips(job.job_dir(), clip_list, manual=True)
 
 app = FastAPI(title="Legendas Locais")
+app.include_router(hosted_router)
+app.include_router(admin_router)
+
+@app.middleware("http")
+async def _inject_user_context(request, call_next):
+    auth = request.headers.get("authorization") or ""
+    if auth.startswith("Bearer "):
+        from auth import decode_bearer_token
+
+        try:
+            payload = decode_bearer_token(auth[7:].strip())
+            sub = payload.get("sub")
+            if sub:
+                set_current_user_id(str(sub))
+        except Exception:
+            log.debug("failed to decode bearer token for user context injection")
+    return await call_next(request)
 
 
 def _cors_origins() -> list[str]:
@@ -78,7 +104,7 @@ def _cors_origins() -> list[str]:
         o.strip()
         for o in os.environ.get(
             "ALLOWED_ORIGINS",
-            "http://localhost:3000,https://legendas.clonefyia.com",
+            "http://localhost:3000,https://app.clipsaas.site",
         ).split(",")
         if o.strip()
     ]
@@ -87,10 +113,14 @@ def _cors_origins() -> list[str]:
 def _configure_cors() -> None:
     origins = _cors_origins()
     if app_settings.cors_allow_all() or not origins:
+        log.warning(
+            "CORS allow-all mode enabled — credentials enabled with broad origin regex. "
+            "Set ALLOWED_ORIGINS explicitly for production."
+        )
         app.add_middleware(
             CORSMiddleware,
             allow_origin_regex=r"https?://.*",
-            allow_credentials=True,
+            allow_credentials=False,
             allow_methods=["*"],
             allow_headers=["*"],
         )
@@ -253,15 +283,21 @@ class ClipKeywordsUpdate(BaseModel):
     effects: dict | None = None
 
 
+class DetectClipsRequest(BaseModel):
+    """Focos editoriais opcionais (ex.: polemico, engracado) para direcionar a IA."""
+    focuses: list[str] = []
+
+
 class ClipsRenderRequest(BaseModel):
     clip_ids: list[str]
-    aspect: str = "original"
+    # None => usa o valor salvo em clips.json (merge em _render_opts_from_request).
+    aspect: str | None = None
     template: str | None = None
     preset: str | None = "capcut_amarelo"
     custom: dict | None = None
     words_per_line: int = 4
     resolution: str = "1080p"
-    highlight_enabled: bool = False
+    highlight_enabled: bool | None = None
     overlay_asset: str | None = None
     profile_asset: str | None = None
     instagram_username: str | None = None
@@ -290,13 +326,14 @@ class ClipsRenderRequest(BaseModel):
 
 
 class SingleClipRenderRequest(BaseModel):
-    aspect: str = "vertical"
+    # None => usa o valor salvo em clips.json (merge em _render_opts_from_request).
+    aspect: str | None = None
     template: str | None = None
     preset: str | None = "capcut_amarelo"
     custom: dict | None = None
     words_per_line: int = 4
     resolution: str = "1080p"
-    highlight_enabled: bool = False
+    highlight_enabled: bool | None = None
     overlay_asset: str | None = None
     profile_asset: str | None = None
     instagram_username: str | None = None
@@ -482,31 +519,32 @@ def _sync_render_one_clip(
     opts: dict,
     on_progress=None,
 ) -> None:
-    data = json.loads(job.words_path.read_text(encoding="utf-8"))
-    words = data.get("words", [])
-    clip["status"] = "rendering"
-    clip["error"] = None
-    _persist_clip_status(job.job_dir(), clip)
-    try:
-        render_clip(
-            job.job_dir(), job.video_path, words, clip,
-            aspect=opts["aspect"],
-            template=opts.get("template"),
-            preset=opts["preset"],
-            custom_style=opts["custom_style"],
-            words_per_line=opts["words_per_line"],
-            resolution=opts["resolution"],
-            highlight_enabled=opts.get("highlight_enabled", False),
-            overlay_asset=clip.get("overlay_asset") or opts.get("overlay_asset"),
-            compose_opts=opts.get("compose"),
-            on_progress=on_progress,
-        )
-        clip["status"] = "done"
-        clip.pop("error", None)
-    except Exception as e:
-        clip["status"] = "error"
-        clip["error"] = str(e)
-    _persist_clip_status(job.job_dir(), clip)
+    with user_api_context(job.user_id):
+        data = json.loads(job.words_path.read_text(encoding="utf-8"))
+        words = data.get("words", [])
+        clip["status"] = "rendering"
+        clip["error"] = None
+        _persist_clip_status(job.job_dir(), clip)
+        try:
+            render_clip(
+                job.job_dir(), job.video_path, words, clip,
+                aspect=opts["aspect"],
+                template=opts.get("template"),
+                preset=opts["preset"],
+                custom_style=opts["custom_style"],
+                words_per_line=opts["words_per_line"],
+                resolution=opts["resolution"],
+                highlight_enabled=opts.get("highlight_enabled", False),
+                overlay_asset=clip.get("overlay_asset") or opts.get("overlay_asset"),
+                compose_opts=opts.get("compose"),
+                on_progress=on_progress,
+            )
+            clip["status"] = "done"
+            clip.pop("error", None)
+        except Exception as e:
+            clip["status"] = "error"
+            clip["error"] = str(e)
+        _persist_clip_status(job.job_dir(), clip)
 
 
 # ---------- routes ----------
@@ -514,12 +552,15 @@ def _sync_render_one_clip(
 @app.get("/api/health")
 async def health() -> dict:
     s = app_settings.get()
+    mt = is_multi_tenant()
     return {
         "ok": True,
-        "openai_configured": s.openai_configured(),
+        "multi_tenant": mt,
+        "openai_configured": s.openai_configured() if not mt else None,
         "transcribe_engine": s.transcribe_engine,
         "transcribe_ready": s.transcribe_ready(),
         "ffmpeg_ok": ffmpeg_ok(),
+        "job_max_age_hours": __import__("tenant").job_max_age_hours() if mt else None,
     }
 
 
@@ -542,11 +583,15 @@ class SettingsTestBody(BaseModel):
 
 @app.get("/api/settings")
 async def get_settings_route() -> dict:
+    if is_multi_tenant():
+        raise HTTPException(403, "Use /api/me em modo hosted.")
     return app_settings.to_public()
 
 
 @app.put("/api/settings")
 async def put_settings_route(body: SettingsUpdate) -> dict:
+    if is_multi_tenant():
+        raise HTTPException(403, "Use /api/me/settings em modo hosted.")
     patch = body.model_dump(exclude_unset=True)
     app_settings.save(patch)
     return app_settings.to_public()
@@ -554,6 +599,8 @@ async def put_settings_route(body: SettingsUpdate) -> dict:
 
 @app.post("/api/settings/test")
 async def test_settings_route(body: SettingsTestBody | None = None) -> dict:
+    if is_multi_tenant():
+        raise HTTPException(403, "Use /api/me/settings/test em modo hosted.")
     import requests
     from openai_chat import build_chat_payload
 
@@ -576,8 +623,13 @@ async def test_settings_route(body: SettingsTestBody | None = None) -> dict:
         if resp.status_code != 200:
             return {"ok": False, "message": resp.text[:300]}
         return {"ok": True, "message": "Conexão com OpenAI OK"}
+    except requests.exceptions.ConnectionError:
+        return {"ok": False, "message": "Falha de conexão com OpenAI. Verifique a URL e tente novamente."}
+    except requests.exceptions.Timeout:
+        return {"ok": False, "message": "OpenAI demorou demais para responder. Tente novamente."}
     except Exception as exc:
-        return {"ok": False, "message": str(exc)}
+        log.warning("settings test failed: %s", exc)
+        return {"ok": False, "message": "Erro ao testar conexão com OpenAI."}
 
 
 @app.get("/api/presets")
@@ -597,10 +649,9 @@ _ASSET_EXTS = _IMAGE_EXTS | _VIDEO_EXTS
 
 
 @app.post("/api/jobs/{job_id}/assets")
-async def upload_asset(job_id: str, file: UploadFile = File(...)) -> dict:
-    job = get_job(job_id)
-    if not job:
-        raise HTTPException(404, "job not found")
+async def upload_asset(job_id: str, file: UploadFile = File(...),
+    user: Optional[UserContext] = Depends(mt_active_user)) -> dict:
+    job = resolve_job(job_id, user)
     if not file.filename:
         raise HTTPException(400, "filename is required")
     suffix = Path(file.filename).suffix.lower()
@@ -623,10 +674,9 @@ async def upload_asset(job_id: str, file: UploadFile = File(...)) -> dict:
 
 
 @app.get("/api/jobs/{job_id}/assets")
-async def list_assets(job_id: str) -> dict:
-    job = get_job(job_id)
-    if not job:
-        raise HTTPException(404, "job not found")
+async def list_assets(job_id: str,
+    user: Optional[UserContext] = Depends(mt_active_user)) -> dict:
+    job = resolve_job(job_id, user)
     assets_dir = job.job_dir() / "assets"
     if not assets_dir.exists():
         return {"assets": []}
@@ -643,10 +693,9 @@ async def list_assets(job_id: str) -> dict:
 
 
 @app.delete("/api/jobs/{job_id}/assets/{filename}")
-async def delete_asset(job_id: str, filename: str) -> dict:
-    job = get_job(job_id)
-    if not job:
-        raise HTTPException(404, "job not found")
+async def delete_asset(job_id: str, filename: str,
+    user: Optional[UserContext] = Depends(mt_active_user)) -> dict:
+    job = resolve_job(job_id, user)
     safe = Path(filename).name
     target = job.job_dir() / "assets" / safe
     if not target.exists() or not target.is_file():
@@ -659,10 +708,9 @@ async def delete_asset(job_id: str, filename: str) -> dict:
 
 
 @app.get("/api/jobs/{job_id}/assets/{filename}")
-async def serve_asset(job_id: str, filename: str) -> FileResponse:
-    job = get_job(job_id)
-    if not job:
-        raise HTTPException(404, "job not found")
+async def serve_asset(job_id: str, filename: str,
+    user: Optional[UserContext] = Depends(mt_active_user_media)) -> FileResponse:
+    job = resolve_job(job_id, user)
     safe = Path(filename).name
     target = job.job_dir() / "assets" / safe
     if not target.exists() or not target.is_file():
@@ -671,10 +719,9 @@ async def serve_asset(job_id: str, filename: str) -> FileResponse:
 
 
 @app.get("/api/jobs/{job_id}/keywords")
-async def get_keywords(job_id: str) -> dict:
-    job = get_job(job_id)
-    if not job:
-        raise HTTPException(404, "job not found")
+async def get_keywords(job_id: str,
+    user: Optional[UserContext] = Depends(mt_active_user)) -> dict:
+    job = resolve_job(job_id, user)
     if not job.words_path or not job.words_path.exists():
         raise HTTPException(400, "transcribe first")
     try:
@@ -686,10 +733,9 @@ async def get_keywords(job_id: str) -> dict:
 
 
 @app.post("/api/jobs/{job_id}/keywords/detect")
-async def detect_keywords_route(job_id: str) -> dict:
-    job = get_job(job_id)
-    if not job:
-        raise HTTPException(404, "job not found")
+async def detect_keywords_route(job_id: str,
+    user: Optional[UserContext] = Depends(mt_openai_user)) -> dict:
+    job = resolve_job(job_id, user)
     if not job.words_path or not job.words_path.exists():
         raise HTTPException(400, "transcribe first")
     try:
@@ -705,10 +751,9 @@ async def detect_keywords_route(job_id: str) -> dict:
 
 
 @app.put("/api/jobs/{job_id}/keywords")
-async def save_keywords_route(job_id: str, body: KeywordsUpdate) -> dict:
-    job = get_job(job_id)
-    if not job:
-        raise HTTPException(404, "job not found")
+async def save_keywords_route(job_id: str, body: KeywordsUpdate,
+    user: Optional[UserContext] = Depends(mt_active_user)) -> dict:
+    job = resolve_job(job_id, user)
     if not job.words_path or not job.words_path.exists():
         raise HTTPException(400, "transcribe first")
     try:
@@ -723,10 +768,9 @@ async def save_keywords_route(job_id: str, body: KeywordsUpdate) -> dict:
 
 
 @app.post("/api/jobs/{job_id}/enrich")
-async def enrich_job(job_id: str, body: EnrichRequest) -> dict:
-    job = get_job(job_id)
-    if not job:
-        raise HTTPException(404, "job not found")
+async def enrich_job(job_id: str, body: EnrichRequest,
+    user: Optional[UserContext] = Depends(mt_openai_user)) -> dict:
+    job = resolve_job(job_id, user)
     if not job.words_path or not job.words_path.exists():
         raise HTTPException(400, "transcribe first")
     try:
@@ -760,6 +804,7 @@ async def enrich_job(job_id: str, body: EnrichRequest) -> dict:
 
 @app.post("/api/jobs")
 async def upload_job(
+    user: Optional[UserContext] = Depends(mt_openai_user),
     file: UploadFile = File(...),
     language: str = Form("auto"),
     mode: str = Form("legendas"),
@@ -773,12 +818,30 @@ async def upload_job(
     if job_mode not in ("legendas", "cortes"):
         job_mode = "legendas"
     job_id = uuid.uuid4().hex[:12]
-    job = create_job(job_id, file.filename, mode=job_mode)
+    uid = user.user_id if user else None
+    job = create_job(job_id, file.filename, mode=job_mode, user_id=uid)
     job.language = (language or "auto").strip().lower()
-    # Stream upload to disk in chunks (the actual upload transfer)
-    with open(job.video_path, "wb") as fh:
-        while chunk := await file.read(1 << 20):
-            fh.write(chunk)
+    if is_multi_tenant() and uid:
+        try:
+            from db_jobs import register_job
+
+            register_job(job_id, uid, file.filename, job_mode)
+        except Exception as exc:
+            logging.getLogger("legendas").warning("register_job failed: %s", exc)
+    total_bytes = 0
+    # Enforce max upload size (2 GB) to prevent disk exhaustion.
+    MAX_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024
+    try:
+        with open(job.video_path, "wb") as fh:
+            while chunk := await file.read(1 << 20):
+                total_bytes += len(chunk)
+                if total_bytes > MAX_UPLOAD_BYTES:
+                    raise HTTPException(413, "Arquivo excede o limite de 2 GB.")
+                fh.write(chunk)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(500, f"Falha ao salvar vídeo: {exc}") from exc
 
     # Return immediately after the file is saved — probe/extract/transcribe run in
     # background so Traefik/nginx never 502 while ffprobe runs on large files.
@@ -789,65 +852,87 @@ async def upload_job(
 
 async def _process_upload(job: Job) -> None:
     """Background: validate video, extract audio, then auto-transcribe."""
-    job.update(Stage.QUEUED, 0.02, "Validando vídeo...")
-    try:
-        info = await asyncio.to_thread(probe_video, job.video_path)
-        job.width, job.height, job.fps, job.duration = (
-            info["width"], info["height"], info["fps"], info["duration"]
-        )
-    except Exception as e:
-        job.update(Stage.ERROR, 0.0, "Não consegui ler o vídeo enviado.")
-        logging.getLogger("legendas").warning("probe failed for %s: %s", job.id, e)
-        return
+    with user_api_context(job.user_id):
+        if job.video_path.suffix.lower() not in {".mp4", ".webm"}:
+            job.update(Stage.QUEUED, 0.05, "Convertendo vídeo para MP4 (Compatibilidade Web)...")
+            try:
+                target_path = job.video_path.with_suffix(".mp4")
+                proc = await asyncio.create_subprocess_exec(
+                    "ffmpeg", "-y", "-i", str(job.video_path),
+                    "-c:v", "libx264", "-preset", "veryfast", "-crf", "28",
+                    "-c:a", "aac", "-movflags", "+faststart",
+                    str(target_path),
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.DEVNULL
+                )
+                await proc.wait()
+                if proc.returncode == 0 and target_path.exists():
+                    job.video_path.unlink(missing_ok=True)
+                    job.video_path = target_path
+                    import jobs as _jobs
+                    _jobs.save_meta(job.job_dir(), filename=target_path.name)
+            except Exception as e:
+                logging.getLogger("legendas").warning("Transcode failed for %s: %s", job.id, e)
 
-    if not info.get("has_audio", True):
-        job.update(Stage.ERROR, 0.0, "O vídeo não tem faixa de áudio.")
-        return
+        job.update(Stage.QUEUED, 0.1, "Validando vídeo...")
+        try:
+            info = await asyncio.to_thread(probe_video, job.video_path)
+            job.width, job.height, job.fps, job.duration = (
+                info["width"], info["height"], info["fps"], info["duration"]
+            )
+        except Exception as e:
+            job.update(Stage.ERROR, 0.0, "Não consegui ler o vídeo enviado.")
+            logging.getLogger("legendas").warning("probe failed for %s: %s", job.id, e)
+            return
 
-    job.update(Stage.EXTRACTING_AUDIO, 0.0, "Extraindo áudio")
-    try:
-        await asyncio.to_thread(extract_audio, job.video_path, job.audio_path)
-    except Exception as e:
-        job.update(Stage.ERROR, 0.0, f"Falha ao extrair áudio: {e}")
-        return
-    job.update(Stage.AUDIO_READY, 1.0, "Áudio pronto")
-    await _run_transcribe(job)
+        if not info.get("has_audio", True):
+            job.update(Stage.ERROR, 0.0, "O vídeo não tem faixa de áudio.")
+            return
+
+        job.update(Stage.EXTRACTING_AUDIO, 0.0, "Extraindo áudio")
+        try:
+            await asyncio.to_thread(extract_audio, job.video_path, job.audio_path)
+        except Exception as e:
+            job.update(Stage.ERROR, 0.0, f"Falha ao extrair áudio: {e}")
+            return
+        job.update(Stage.AUDIO_READY, 1.0, "Áudio pronto")
+        await _run_transcribe(job)
 
 
 @app.get("/api/jobs")
-async def list_jobs() -> dict:
-    return {"jobs": [j.to_dict() for j in jobs.list_jobs()]}
+async def list_jobs(user: Optional[UserContext] = Depends(mt_active_user)) -> dict:
+    uid = user.user_id if user else None
+    return {"jobs": [j.to_dict() for j in jobs.list_jobs(uid)]}
 
 
 @app.get("/api/jobs/{job_id}")
-async def job_detail(job_id: str) -> dict:
-    job = get_job(job_id)
-    if not job:
-        raise HTTPException(404, "job not found")
+async def job_detail(job_id: str,
+    user: Optional[UserContext] = Depends(mt_active_user)) -> dict:
+    job = resolve_job(job_id, user)
     return job.to_dict()
 
 
 @app.delete("/api/jobs/{job_id}")
-async def delete_job_route(job_id: str) -> dict:
-    removed = jobs.delete_job(job_id)
+async def delete_job_route(job_id: str,
+    user: Optional[UserContext] = Depends(mt_active_user)) -> dict:
+    job = resolve_job(job_id, user)
+    removed = jobs.delete_job(job.id)
     if not removed:
         raise HTTPException(404, "job not found")
     return {"ok": True, "deleted": job_id}
 
 
 @app.get("/api/jobs/{job_id}/events")
-async def job_events(job_id: str) -> StreamingResponse:
-    job = get_job(job_id)
-    if not job:
-        raise HTTPException(404, "job not found")
+async def job_events(job_id: str,
+    user: Optional[UserContext] = Depends(mt_active_user_media)) -> StreamingResponse:
+    job = resolve_job(job_id, user)
     return StreamingResponse(event_stream(job), media_type="text/event-stream")
 
 
 @app.post("/api/jobs/{job_id}/transcribe")
-async def transcribe_job(job_id: str) -> dict:
-    job = get_job(job_id)
-    if not job:
-        raise HTTPException(404, "job not found")
+async def transcribe_job(job_id: str,
+    user: Optional[UserContext] = Depends(mt_openai_user)) -> dict:
+    job = resolve_job(job_id, user)
     if job.stage == Stage.TRANSCRIBING:
         raise HTTPException(409, "transcription already running")
     # Allow re-transcribe if previous run returned empty words
@@ -857,94 +942,91 @@ async def transcribe_job(job_id: str) -> dict:
 
 
 async def _run_transcribe(job: Job) -> None:
-    try:
-        def on_progress(p: float, msg: str) -> None:
-            job.update(Stage.TRANSCRIBING, p, msg)
+    with user_api_context(job.user_id):
+        try:
+            def on_progress(p: float, msg: str) -> None:
+                job.update(Stage.TRANSCRIBING, p, msg)
 
-        # Re-extract as MP3 if missing, WAV (too large), or over OpenAI limit.
-        from transcribe import OPENAI_MAX_BYTES
+            from transcribe import OPENAI_MAX_BYTES
 
-        def ensure_audio() -> None:
-            mp3 = job.job_dir() / "audio.mp3"
-            if job.video_path and job.video_path.exists():
-                cur = job.audio_path
-                if (
-                    cur is None
-                    or not cur.exists()
-                    or cur.suffix.lower() == ".wav"
-                    or cur.stat().st_size > OPENAI_MAX_BYTES
-                ):
-                    job.audio_path = mp3
-                    extract_audio(job.video_path, mp3)
+            def ensure_audio() -> None:
+                mp3 = job.job_dir() / "audio.mp3"
+                if job.video_path and job.video_path.exists():
+                    cur = job.audio_path
+                    if (
+                        cur is None
+                        or not cur.exists()
+                        or cur.suffix.lower() == ".wav"
+                        or cur.stat().st_size > OPENAI_MAX_BYTES
+                    ):
+                        job.audio_path = mp3
+                        extract_audio(job.video_path, mp3)
 
-        await asyncio.to_thread(ensure_audio)
+            await asyncio.to_thread(ensure_audio)
 
-        # "auto" (or empty) -> let Whisper detect the spoken language.
-        lang = job.language if job.language and job.language != "auto" else None
+            lang = job.language if job.language and job.language != "auto" else None
 
-        def work() -> None:
-            transcribe(
-                job.audio_path, job.words_path,
-                duration=job.duration, on_progress=on_progress,
-                language=lang,
-                width=job.width, height=job.height, fps=job.fps,
-            )
+            def work() -> None:
+                transcribe(
+                    job.audio_path, job.words_path,
+                    duration=job.duration, on_progress=on_progress,
+                    language=lang,
+                    width=job.width, height=job.height, fps=job.fps,
+                )
 
-        await asyncio.to_thread(work)
+            await asyncio.to_thread(work)
 
-        # Unlock the editor immediately after Whisper — punctuation is slow (GPT).
-        from timing import trim_word_ends
+            from timing import trim_word_ends
 
-        def trim_only() -> None:
-            data = json.loads(job.words_path.read_text(encoding="utf-8"))
-            data["words"] = trim_word_ends(data.get("words", []))
-            job.words_path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+            def trim_only() -> None:
+                data = json.loads(job.words_path.read_text(encoding="utf-8"))
+                data["words"] = trim_word_ends(data.get("words", []))
+                job.words_path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
 
-        await asyncio.to_thread(trim_only)
-        job.update(Stage.TRANSCRIBED, 1.0, "Transcrição concluída")
-        asyncio.create_task(_apply_punctuation_background(job))
-    except Exception as e:
-        job.update(Stage.ERROR, 0.0, f"transcribe falhou: {e}")
+            await asyncio.to_thread(trim_only)
+            job.update(Stage.TRANSCRIBED, 1.0, "Transcrição concluída")
+            asyncio.create_task(_apply_punctuation_background(job))
+        except Exception as e:
+            job.update(Stage.ERROR, 0.0, f"transcribe falhou: {e}")
 
 
 async def _apply_punctuation_background(job: Job) -> None:
     """Best-effort GPT punctuation — does not block the editor."""
     from timing import trim_word_ends
 
-    try:
-        def work() -> None:
-            data = json.loads(job.words_path.read_text(encoding="utf-8"))
-            words = data.get("words", [])
-            lang = job.language if job.language != "auto" else "auto"
-            try:
-                words = enrich.apply_punctuation_auto(words, job.job_dir(), lang)
-            except Exception as exc:
-                import logging
-                logging.getLogger("legendas").warning("punctuation failed: %s", exc)
-            data["words"] = trim_word_ends(words)
-            job.words_path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    with user_api_context(job.user_id):
+        try:
+            def work() -> None:
+                data = json.loads(job.words_path.read_text(encoding="utf-8"))
+                words = data.get("words", [])
+                lang = job.language if job.language != "auto" else "auto"
+                try:
+                    words = enrich.apply_punctuation_auto(words, job.job_dir(), lang)
+                except Exception as exc:
+                    import logging
+                    logging.getLogger("legendas").warning("punctuation failed: %s", exc)
+                data["words"] = trim_word_ends(words)
+                job.words_path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
 
-        await asyncio.to_thread(work)
-        job.update(Stage.TRANSCRIBED, 1.0, "Transcrição concluída (com pontuação)")
-    except Exception:
-        pass
+            await asyncio.to_thread(work)
+            job.update(Stage.TRANSCRIBED, 1.0, "Transcrição concluída (com pontuação)")
+        except Exception:
+            pass
 
 
 @app.get("/api/jobs/{job_id}/words")
-async def get_words(job_id: str) -> dict:
-    job = get_job(job_id)
-    if not job:
-        raise HTTPException(404, "job not found")
+async def get_words(job_id: str,
+    user: Optional[UserContext] = Depends(mt_active_user)) -> dict:
+    job = resolve_job(job_id, user)
     if not job.words_path or not job.words_path.exists():
         raise HTTPException(404, "words.json not ready")
     return json.loads(job.words_path.read_text(encoding="utf-8"))
 
 
 @app.put("/api/jobs/{job_id}/words")
-async def update_words(job_id: str, body: WordsUpdate) -> dict:
-    job = get_job(job_id)
-    if not job:
-        raise HTTPException(404, "job not found")
+async def update_words(job_id: str, body: WordsUpdate,
+    user: Optional[UserContext] = Depends(mt_active_user)) -> dict:
+    job = resolve_job(job_id, user)
     from timing import trim_word_ends
     payload = {
         "duration": job.duration,
@@ -958,10 +1040,9 @@ async def update_words(job_id: str, body: WordsUpdate) -> dict:
 
 
 @app.post("/api/jobs/{job_id}/render")
-async def render_job(job_id: str, body: RenderRequest) -> dict:
-    job = get_job(job_id)
-    if not job:
-        raise HTTPException(404, "job not found")
+async def render_job(job_id: str, body: RenderRequest,
+    user: Optional[UserContext] = Depends(mt_openai_user)) -> dict:
+    job = resolve_job(job_id, user)
     if not job.words_path or not job.words_path.exists():
         raise HTTPException(400, "transcribe first")
     if job.stage == Stage.RENDERING:
@@ -971,114 +1052,109 @@ async def render_job(job_id: str, body: RenderRequest) -> dict:
 
 
 async def _run_render(job: Job, body: RenderRequest) -> None:
-    try:
-        cfg = apply_preset(body.preset, body.custom)
-        if body.pos_x is not None:
-            cfg.pos_x = body.pos_x
-        if body.pos_y is not None:
-            cfg.pos_y = body.pos_y
-
-        tpl = get_template(body.template)
-
-        # Validate template requirements early so we don't waste a render.
-        overlay_path: Path | None = None
-        if tpl:
-            if tpl.needs_overlay and not body.overlay_asset:
-                raise RuntimeError("Este template exige uma mídia (imagem/vídeo) upada.")
-            if body.overlay_asset:
-                candidate = job.job_dir() / "assets" / Path(body.overlay_asset).name
-                if not candidate.exists():
-                    raise RuntimeError(f"Mídia não encontrada: {body.overlay_asset}")
-                overlay_path = candidate
-
-        job.update(Stage.GENERATING_ASS, 0.0, "Gerando legendas ASS")
-        data = json.loads(job.words_path.read_text(encoding="utf-8"))
-        from timing import trim_word_ends
-        data["words"] = trim_word_ends(data.get("words", []))
-        # When a template is active, the ASS canvas matches the template (e.g.
-        # 1080x1920) so subtitle \pos coordinates line up with the composed
-        # output. Otherwise we use the probed input dims as before.
-        if tpl:
-            data["width"] = tpl.width
-            data["height"] = tpl.height
-            if body.pos_y is None:
-                cfg.pos_y = float(tpl.subtitle_safe_y)
-            if body.pos_x is None and tpl.subtitle_safe_x is not None:
-                cfg.pos_x = float(tpl.subtitle_safe_x)
-        else:
-            from media import probe_video
-            info = probe_video(job.video_path)
-            data["width"] = info["width"]
-            data["height"] = info["height"]
-        data["fps"] = job.fps
-
-        # Build highlight phrases only when the user opted in.
-        highlight_phrases: list[dict] = []
-        kw_indices: list[int] | None = None
-        if body.highlight_enabled and body.keywords:
-            kw_indices = body.keywords
-            highlight_phrases = keywords.group_highlight_phrases(
-                data.get("words", []), body.keywords,
-            )
-
-        pause_s = getattr(cfg, "pause_threshold_s", 0.45) or 0.45
-        effects_map = body.highlight_effects or keywords.load_effects(job.job_dir())
-
-        await asyncio.to_thread(
-            generate_ass, data, cfg, body.words_per_line, job.ass_path,
-            kw_indices,
-            body.highlight_enabled,
-            highlight_phrases if body.highlight_enabled else None,
-            pause_s,
-        )
-        job.update(Stage.GENERATING_ASS, 1.0, "ASS pronto")
-
-        def on_progress(p: float, msg: str) -> None:
-            job.update(Stage.RENDERING, p, msg)
-
-        if tpl:
-            import compose
-            extras = _compose_extras_from_render(body, job.job_dir())
-            def work() -> None:
-                compose.render_compose(
-                    job.video_path, overlay_path, job.ass_path, job.output_path,
-                    tpl, highlight_phrases if body.highlight_enabled else None,
-                    body.resolution,
-                    duration=job.duration, on_progress=on_progress,
-                    video_pos=(body.video_pos_x, body.video_pos_y),
-                    highlight_effects=effects_map if body.highlight_enabled else None,
-                    extras=extras,
-                    job_dir=job.job_dir(),
-                )
-        else:
-            def work() -> None:
-                render_video(
-                    job.video_path, job.ass_path, job.output_path,
-                    duration=job.duration, on_progress=on_progress,
-                    highlight_phrases=highlight_phrases if body.highlight_enabled else None,
-                    highlight_effects=effects_map if body.highlight_enabled else None,
-                )
-
-        job.update(Stage.RENDERING, 0.0, "Renderizando vídeo")
-        await asyncio.to_thread(work)
-        job.update(Stage.DONE, 1.0, "Pronto")
-        # Keep the input video and audio so the user can re-render with a
-        # different template/style/keywords. Disk usage is bounded by
-        # cleanup_old_jobs (12h max age). Only the extracted audio is disposable
-        # since we can re-extract it from the input if needed.
+    with user_api_context(job.user_id):
         try:
-            if job.audio_path and job.audio_path.exists():
-                job.audio_path.unlink()
-        except OSError:
-            pass
-    except Exception as e:
-        job.update(Stage.ERROR, 0.0, f"render falhou: {e}")
+            cfg = apply_preset(body.preset, body.custom)
+            if body.pos_x is not None:
+                cfg.pos_x = body.pos_x
+            if body.pos_y is not None:
+                cfg.pos_y = body.pos_y
+
+            tpl = get_template(body.template)
+
+            overlay_path: Path | None = None
+            if tpl:
+                if tpl.needs_overlay and not body.overlay_asset:
+                    raise RuntimeError("Este template exige uma mídia (imagem/vídeo) upada.")
+                if body.overlay_asset:
+                    candidate = job.job_dir() / "assets" / Path(body.overlay_asset).name
+                    if not candidate.exists():
+                        raise RuntimeError(f"Mídia não encontrada: {body.overlay_asset}")
+                    overlay_path = candidate
+
+            job.update(Stage.GENERATING_ASS, 0.0, "Gerando legendas ASS")
+            data = json.loads(job.words_path.read_text(encoding="utf-8"))
+            from timing import trim_word_ends
+            data["words"] = trim_word_ends(data.get("words", []))
+            if tpl:
+                data["width"] = tpl.width
+                data["height"] = tpl.height
+                if body.pos_y is None:
+                    cfg.pos_y = float(tpl.subtitle_safe_y)
+                if body.pos_x is None and tpl.subtitle_safe_x is not None:
+                    cfg.pos_x = float(tpl.subtitle_safe_x)
+            else:
+                from media import probe_video
+                info = probe_video(job.video_path)
+                data["width"] = info["width"]
+                data["height"] = info["height"]
+            data["fps"] = job.fps
+
+            highlight_phrases: list[dict] = []
+            kw_indices: list[int] | None = None
+            if body.highlight_enabled and body.keywords:
+                kw_indices = body.keywords
+                highlight_phrases = keywords.group_highlight_phrases(
+                    data.get("words", []), body.keywords,
+                )
+
+            pause_s = getattr(cfg, "pause_threshold_s", 0.45) or 0.45
+
+            await asyncio.to_thread(
+                generate_ass, data, cfg, body.words_per_line, job.ass_path,
+                kw_indices,
+                body.highlight_enabled,
+                highlight_phrases if body.highlight_enabled else None,
+                pause_s,
+            )
+            job.update(Stage.GENERATING_ASS, 1.0, "ASS pronto")
+
+            def on_progress(p: float, msg: str) -> None:
+                job.update(Stage.RENDERING, p, msg)
+
+            if tpl:
+                import compose
+                extras = _compose_extras_from_render(body, job.job_dir())
+                def work() -> None:
+                    compose.render_compose(
+                        job.video_path, overlay_path, job.ass_path, job.output_path,
+                        tpl, highlight_phrases if body.highlight_enabled else None,
+                        body.resolution,
+                        duration=job.duration, on_progress=on_progress,
+                        video_pos=(body.video_pos_x, body.video_pos_y),
+                        extras=extras,
+                        job_dir=job.job_dir(),
+                    )
+            else:
+                import compose
+                extras = _compose_extras_from_render(body, job.job_dir())
+                def work() -> None:
+                    render_video(
+                        job.video_path, job.ass_path, job.output_path,
+                        duration=job.duration, on_progress=on_progress,
+                        highlight_phrases=highlight_phrases if body.highlight_enabled else None,
+                        extras=extras,
+                        canvas_w=data["width"],
+                        canvas_h=data["height"],
+                    )
+
+            job.update(Stage.RENDERING, 0.0, "Renderizando vídeo")
+            await asyncio.to_thread(work)
+            job.update(Stage.DONE, 1.0, "Pronto")
+            try:
+                if job.audio_path and job.audio_path.exists():
+                    job.audio_path.unlink()
+            except OSError:
+                pass
+        except Exception as e:
+            job.update(Stage.ERROR, 0.0, f"render falhou: {e}")
 
 
 @app.get("/api/jobs/{job_id}/output.mp4")
-async def download_output(job_id: str) -> FileResponse:
-    job = get_job(job_id)
-    if not job or not job.output_path or not job.output_path.exists():
+async def download_output(job_id: str,
+    user: Optional[UserContext] = Depends(mt_active_user_media)) -> FileResponse:
+    job = resolve_job(job_id, user)
+    if not job.output_path or not job.output_path.exists():
         raise HTTPException(404, "output not ready")
     return FileResponse(
         job.output_path, media_type="video/mp4",
@@ -1087,9 +1163,10 @@ async def download_output(job_id: str) -> FileResponse:
 
 
 @app.get("/api/jobs/{job_id}/video")
-async def download_input(job_id: str) -> FileResponse:
-    job = get_job(job_id)
-    if not job or not job.video_path or not job.video_path.exists():
+async def download_input(job_id: str,
+    user: Optional[UserContext] = Depends(mt_active_user_media)) -> FileResponse:
+    job = resolve_job(job_id, user)
+    if not job.video_path or not job.video_path.exists():
         raise HTTPException(404, "video not found")
     return FileResponse(job.video_path, media_type="video/mp4")
 
@@ -1097,48 +1174,49 @@ async def download_input(job_id: str) -> FileResponse:
 # ---------- clips (Cortes mode) ----------
 
 @app.post("/api/jobs/{job_id}/clips/detect")
-async def detect_clips_route(job_id: str) -> dict:
-    job = get_job(job_id)
-    if not job:
-        raise HTTPException(404, "job not found")
+async def detect_clips_route(job_id: str,
+    body: DetectClipsRequest | None = None,
+    user: Optional[UserContext] = Depends(mt_openai_user)) -> dict:
+    job = resolve_job(job_id, user)
     if not job.words_path or not job.words_path.exists():
         raise HTTPException(400, "transcribe first")
     if job_id in _clip_detect_running:
         return {"ok": True, "detecting": True}
-    asyncio.create_task(_run_clip_detect(job))
+    focuses = list(body.focuses) if body and body.focuses else []
+    asyncio.create_task(_run_clip_detect(job, focuses))
     return {"ok": True, "detecting": True}
 
 
-async def _run_clip_detect(job: Job) -> None:
-    job_id = job.id
-    if job_id in _clip_detect_running:
-        return
-    _clip_detect_running.add(job_id)
-    try:
-        data = json.loads(job.words_path.read_text(encoding="utf-8"))
-        words = data.get("words", [])
-        lang = job.language if job.language and job.language != "auto" else "auto"
-        clips.mark_detecting(job.job_dir())
-        job.update(message="Detectando cortes com IA (vídeos longos podem levar 5–15 min)...")
-        result = await asyncio.to_thread(
-            clips.detect_clips, words, job.job_dir(),
-            duration=job.duration, language=lang, force=True,
-        )
-        n = len(result.get("clips") or [])
-        job.update(message=f"{n} cortes encontrados" if n else "Nenhum corte encontrado")
-    except Exception as e:
-        clips.mark_detect_error(job.job_dir(), str(e))
-        job.update(message=f"Falha ao detectar cortes: {e}")
-    finally:
-        _clip_detect_running.discard(job_id)
-        clips.clear_detecting(job.job_dir())
+async def _run_clip_detect(job: Job, focuses: list[str] | None = None) -> None:
+    with user_api_context(job.user_id):
+        job_id = job.id
+        if job_id in _clip_detect_running:
+            return
+        _clip_detect_running.add(job_id)
+        try:
+            data = json.loads(job.words_path.read_text(encoding="utf-8"))
+            words = data.get("words", [])
+            lang = job.language if job.language and job.language != "auto" else "auto"
+            clips.mark_detecting(job.job_dir())
+            job.update(message="Detectando cortes com IA (vídeos longos podem levar 5–15 min)...")
+            result = await asyncio.to_thread(
+                clips.detect_clips, words, job.job_dir(),
+                duration=job.duration, language=lang, force=True, focuses=focuses,
+            )
+            n = len(result.get("clips") or [])
+            job.update(message=f"{n} cortes encontrados" if n else "Nenhum corte encontrado")
+        except Exception as e:
+            clips.mark_detect_error(job.job_dir(), str(e))
+            job.update(message=f"Falha ao detectar cortes: {e}")
+        finally:
+            _clip_detect_running.discard(job_id)
+            clips.clear_detecting(job.job_dir())
 
 
 @app.get("/api/jobs/{job_id}/clips")
-async def get_clips_route(job_id: str) -> dict:
-    job = get_job(job_id)
-    if not job:
-        raise HTTPException(404, "job not found")
+async def get_clips_route(job_id: str,
+    user: Optional[UserContext] = Depends(mt_active_user)) -> dict:
+    job = resolve_job(job_id, user)
     data = clips.load_clips(job.job_dir())
     detecting = job_id in _clip_detect_running
     if not data:
@@ -1159,18 +1237,16 @@ async def get_clips_route(job_id: str) -> dict:
 
 
 @app.put("/api/jobs/{job_id}/clips")
-async def save_clips_route(job_id: str, body: ClipsUpdate) -> dict:
-    job = get_job(job_id)
-    if not job:
-        raise HTTPException(404, "job not found")
+async def save_clips_route(job_id: str, body: ClipsUpdate,
+    user: Optional[UserContext] = Depends(mt_active_user)) -> dict:
+    job = resolve_job(job_id, user)
     return clips.update_clips(job.job_dir(), body.clips, manual=True)
 
 
 @app.patch("/api/jobs/{job_id}/clips/settings")
-async def patch_clips_settings(job_id: str, body: ClipsSettingsUpdate) -> dict:
-    job = get_job(job_id)
-    if not job:
-        raise HTTPException(404, "job not found")
+async def patch_clips_settings(job_id: str, body: ClipsSettingsUpdate,
+    user: Optional[UserContext] = Depends(mt_active_user)) -> dict:
+    job = resolve_job(job_id, user)
     settings = body.model_dump(exclude_none=True)
     if not settings:
         raise HTTPException(400, "nenhuma configuração enviada")
@@ -1178,10 +1254,9 @@ async def patch_clips_settings(job_id: str, body: ClipsSettingsUpdate) -> dict:
 
 
 @app.post("/api/jobs/{job_id}/clips/sync-editing")
-async def sync_clips_editing_route(job_id: str, body: SyncEditingRequest) -> dict:
-    job = get_job(job_id)
-    if not job:
-        raise HTTPException(404, "job not found")
+async def sync_clips_editing_route(job_id: str, body: SyncEditingRequest,
+    user: Optional[UserContext] = Depends(mt_active_user)) -> dict:
+    job = resolve_job(job_id, user)
     if not job.words_path or not job.words_path.exists():
         raise HTTPException(400, "transcreva o vídeo primeiro")
     data = json.loads(job.words_path.read_text(encoding="utf-8"))
@@ -1203,10 +1278,9 @@ async def sync_clips_editing_route(job_id: str, body: SyncEditingRequest) -> dic
 
 
 @app.get("/api/jobs/{job_id}/clips/{clip_id}/words")
-async def get_clip_words_route(job_id: str, clip_id: str) -> dict:
-    job = get_job(job_id)
-    if not job:
-        raise HTTPException(404, "job not found")
+async def get_clip_words_route(job_id: str, clip_id: str,
+    user: Optional[UserContext] = Depends(mt_active_user)) -> dict:
+    job = resolve_job(job_id, user)
     if not job.words_path or not job.words_path.exists():
         raise HTTPException(400, "transcribe first")
     clip = clips.get_clip(job.job_dir(), clip_id)
@@ -1222,10 +1296,9 @@ async def get_clip_words_route(job_id: str, clip_id: str) -> dict:
 
 
 @app.put("/api/jobs/{job_id}/clips/{clip_id}/words")
-async def save_clip_words_route(job_id: str, clip_id: str, body: ClipWordsUpdate) -> dict:
-    job = get_job(job_id)
-    if not job:
-        raise HTTPException(404, "job not found")
+async def save_clip_words_route(job_id: str, clip_id: str, body: ClipWordsUpdate,
+    user: Optional[UserContext] = Depends(mt_active_user)) -> dict:
+    job = resolve_job(job_id, user)
     clip = clips.get_clip(job.job_dir(), clip_id)
     if not clip:
         raise HTTPException(404, "clip not found")
@@ -1234,10 +1307,9 @@ async def save_clip_words_route(job_id: str, clip_id: str, body: ClipWordsUpdate
 
 
 @app.get("/api/jobs/{job_id}/clips/{clip_id}/keywords")
-async def get_clip_keywords_route(job_id: str, clip_id: str) -> dict:
-    job = get_job(job_id)
-    if not job:
-        raise HTTPException(404, "job not found")
+async def get_clip_keywords_route(job_id: str, clip_id: str,
+    user: Optional[UserContext] = Depends(mt_active_user)) -> dict:
+    job = resolve_job(job_id, user)
     clip = clips.get_clip(job.job_dir(), clip_id)
     if not clip:
         raise HTTPException(404, "clip not found")
@@ -1247,10 +1319,9 @@ async def get_clip_keywords_route(job_id: str, clip_id: str) -> dict:
 
 
 @app.post("/api/jobs/{job_id}/clips/{clip_id}/keywords/detect")
-async def detect_clip_keywords_route(job_id: str, clip_id: str) -> dict:
-    job = get_job(job_id)
-    if not job:
-        raise HTTPException(404, "job not found")
+async def detect_clip_keywords_route(job_id: str, clip_id: str,
+    user: Optional[UserContext] = Depends(mt_openai_user)) -> dict:
+    job = resolve_job(job_id, user)
     if not job.words_path or not job.words_path.exists():
         raise HTTPException(400, "transcribe first")
     clip = clips.get_clip(job.job_dir(), clip_id)
@@ -1270,10 +1341,8 @@ async def detect_clip_keywords_route(job_id: str, clip_id: str) -> dict:
 @app.put("/api/jobs/{job_id}/clips/{clip_id}/keywords")
 async def save_clip_keywords_route(
     job_id: str, clip_id: str, body: ClipKeywordsUpdate,
-) -> dict:
-    job = get_job(job_id)
-    if not job:
-        raise HTTPException(404, "job not found")
+    user: Optional[UserContext] = Depends(mt_active_user)) -> dict:
+    job = resolve_job(job_id, user)
     clip = clips.get_clip(job.job_dir(), clip_id)
     if not clip:
         raise HTTPException(404, "clip not found")
@@ -1289,10 +1358,8 @@ async def save_clip_keywords_route(
 @app.post("/api/jobs/{job_id}/clips/{clip_id}/render")
 async def render_single_clip_route(
     job_id: str, clip_id: str, body: SingleClipRenderRequest,
-) -> dict:
-    job = get_job(job_id)
-    if not job:
-        raise HTTPException(404, "job not found")
+    user: Optional[UserContext] = Depends(mt_openai_user)) -> dict:
+    job = resolve_job(job_id, user)
     if not job.words_path or not job.words_path.exists():
         raise HTTPException(400, "transcribe first")
     _recover_stale_render_state(job)
@@ -1322,10 +1389,9 @@ async def _run_single_clip_render(job: Job, clip_id: str, opts: dict, lock_key: 
 
 
 @app.post("/api/jobs/{job_id}/clips/render")
-async def render_clips_route(job_id: str, body: ClipsRenderRequest) -> dict:
-    job = get_job(job_id)
-    if not job:
-        raise HTTPException(404, "job not found")
+async def render_clips_route(job_id: str, body: ClipsRenderRequest,
+    user: Optional[UserContext] = Depends(mt_openai_user)) -> dict:
+    job = resolve_job(job_id, user)
     if not job.words_path or not job.words_path.exists():
         raise HTTPException(400, "transcribe first")
     _recover_stale_render_state(job)
@@ -1372,10 +1438,9 @@ async def _run_clips_render(job: Job, body: ClipsRenderRequest, batch_key: str) 
 
 
 @app.get("/api/jobs/{job_id}/clips/{clip_id}/output")
-async def download_clip_output(job_id: str, clip_id: str) -> FileResponse:
-    job = get_job(job_id)
-    if not job:
-        raise HTTPException(404, "job not found")
+async def download_clip_output(job_id: str, clip_id: str,
+    user: Optional[UserContext] = Depends(mt_active_user_media)) -> FileResponse:
+    job = resolve_job(job_id, user)
     safe_id = Path(clip_id).name
     out = clips.clip_output_path(job.job_dir(), safe_id)
     if not out.exists():

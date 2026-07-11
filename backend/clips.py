@@ -28,6 +28,53 @@ BODY_MAX_S = 175.0
 PAUSE_SNAP_S = 0.45
 MAX_CLIPS = 24
 MIN_CLIPS_TARGET = 10
+
+# Focos editoriais selecionáveis pelo usuário antes de "Detectar com IA".
+# Cada foco injeta uma instrução extra no prompt do GPT para direcionar a seleção.
+# "viral" é o comportamento padrão (sem instrução extra) e equivale ao histórico.
+FOCUS_LABELS: dict[str, str] = {
+    "viral": "Viral",
+    "polemico": "Polêmicos",
+    "engracado": "Engraçados",
+    "valioso": "Conteúdo valioso",
+    "inspirador": "Inspirador",
+    "choque": "Choque",
+}
+FOCUS_INSTRUCTIONS: dict[str, str] = {
+    "viral": "Priorize ganchos fortes e apelo amplo — estilo Reels/TikTok que bomba.",
+    "polemico": "Priorize trechos com opiniões fortes, afirmações controversas, debates e ângulos que geram comentários e discussão.",
+    "engracado": "Priorize momentos de humor, punchlines, histórias cômicas e reações engraçadas.",
+    "valioso": "Priorize trechos densos em ensinamento, dicas práticas, explicações úteis e takeaways que o viewer salva pra usar depois.",
+    "inspirador": "Priorize trechos de superação, motivação, mudança de mindset e frases de impacto emocional.",
+    "choque": "Priorize fatos surpreendentes, números chocantes, revelações e afirmações que quebram crenças comuns.",
+}
+ALLOWED_FOCUSES = set(FOCUS_INSTRUCTIONS.keys())
+
+
+def _focus_instructions(focuses: list[str] | None) -> str:
+    """Bloco injetado no prompt quando o usuário escolhe focos além do padrão viral."""
+    if not focuses:
+        return ""
+    unique = []
+    seen: set[str] = set()
+    for f in focuses:
+        if f and f in FOCUS_INSTRUCTIONS and f not in seen and f != "viral":
+            unique.append(f)
+            seen.add(f)
+    if not unique:
+        return ""
+    lines = "\n".join(f"- {FOCUS_LABELS[f]}: {FOCUS_INSTRUCTIONS[f]}" for f in unique)
+    return (
+        "\n\n## Foco editorial desta rodada\n"
+        "O usuário pediu cortes destes tipos. Priorize trechos que se encaixem, "
+        "sem sacrificar o gancho:\n" + lines + "\n"
+    )
+
+
+def _sanitize_focuses(focuses: list[str] | None) -> list[str]:
+    if not focuses:
+        return []
+    return [f for f in focuses if f in ALLOWED_FOCUSES]
 CHUNK_WORDS = 500
 SINGLE_PASS_WORDS = 1500
 MIN_CLIP_SCORE = 0.62
@@ -548,7 +595,9 @@ def _openai_json(system: str, user: str, *, max_tokens: int = 2500, model: str |
     return {}
 
 
-def _clip_selection_system(lang_hint: str, target: int, duration: float, word_count: int) -> str:
+def _clip_selection_system(lang_hint: str, target: int, duration: float, word_count: int, focuses: list[str] | None = None) -> str:
+    focus_block = _focus_instructions(focuses)
+    min_dur = 45 if duration >= 60 else max(10, int(duration * 0.4))
     return (
         "Você é um editor sênior de vídeos curtos (Reels/TikTok/Shorts), especialista em transformar "
         "vídeos longos em dezenas de cortes virais." + lang_hint +
@@ -556,7 +605,7 @@ def _clip_selection_system(lang_hint: str, target: int, duration: float, word_co
         f"**pelo menos {target} cortes** de alto valor (meta: 1 corte a cada 2–3 min de conteúdo falado).\n\n"
         "## Prioridade #1: GANCHO irresistível\n"
         "O gancho é a frase mais chamativa do corte — pergunta provocativa, afirmação forte, número chocante, "
-        "punchline ou revelação. Pode vir de **qualquer minuto** do vídeo.\n\n"
+        "punchline ou revelação. Pode vir de **qualquer minuto** do vídeo.\n" + focus_block + "\n"
         "## Estratégia de edição profissional (cold open)\n"
         "Quando o gancho NÃO está no início natural do trecho, use `edit_mode: hook_then_body`:\n"
         "1. **hook** (3–25s): a frase mais impactante, mesmo que esteja em outro ponto do vídeo\n"
@@ -564,7 +613,7 @@ def _clip_selection_system(lang_hint: str, target: int, duration: float, word_co
         "(setup → desenvolvimento → payoff). Não corte antes da conclusão.\n\n"
         "Use `edit_mode: linear` só quando o gancho já está naturalmente no início do trecho.\n\n"
         "## Requisitos de cada corte\n"
-        "- Duração total exportada (hook + body): **45–180 segundos**\n"
+        f"- Duração total exportada (hook + body): **{min_dur}–180 segundos**\n"
         "- Autocontido: viewer entende sem ver o vídeo inteiro\n"
         "- Gancho e corpo sobre a **mesma ideia** (rejeite clickbait desconectado)\n"
         "- **Diversidade temática**: insights diferentes, não variações do mesmo minuto\n"
@@ -583,10 +632,11 @@ def _clip_selection_system(lang_hint: str, target: int, duration: float, word_co
     )
 
 
-def _summarize_block_system(lang_hint: str) -> str:
+def _summarize_block_system(lang_hint: str, focuses: list[str] | None = None) -> str:
+    focus_block = _focus_instructions(focuses)
     return (
         "Você analisa segmentos de transcrição para edição de vídeos curtos profissionais." + lang_hint +
-        "\n\nPara cada bloco, identifique **1–4 candidatos** a cortes com insights fortes.\n"
+        "\n\nPara cada bloco, identifique **1–4 candidatos** a cortes com insights fortes.\n" + focus_block +
         "Para cada candidato:\n"
         "- Sugira gancho impactante (pode ser cold open de outra parte do vídeo se houver frase forte aqui)\n"
         "- Indique corpo com arco completo (setup → payoff)\n\n"
@@ -610,6 +660,7 @@ def _call_gpt_clips(
     language: str,
     *,
     model: str | None = None,
+    focuses: list[str] | None = None,
 ) -> list[dict]:
     lang_hint = ""
     if language and language != "auto":
@@ -621,43 +672,30 @@ def _call_gpt_clips(
     all_raw: list[dict] = []
 
     if len(words) <= SINGLE_PASS_WORDS:
-        system = _clip_selection_system(lang_hint, target, duration, len(words))
+        system = _clip_selection_system(lang_hint, target, duration, len(words), focuses)
         data = _openai_json(system, _transcript_full(words), max_tokens=6000, model=model)
         all_raw.extend(data.get("clips") or [])
     else:
         candidates: list[dict] = []
         blocks = _transcript_blocks(words)
-        sum_system = _summarize_block_system(lang_hint)
-        for i, block in enumerate(blocks, 1):
+        sum_system = _summarize_block_system(lang_hint, focuses)
+        import concurrent.futures
+
+        def _process_block(args: tuple[int, str]) -> dict:
+            i, block_text = args
             print(f"[clips] Analisando bloco {i}/{len(blocks)}...", flush=True)
-            data = _openai_json(sum_system, block, max_tokens=2500, model=model)
-            candidates.extend(data.get("candidates") or data.get("clips") or [])
+            return _openai_json(sum_system, block_text, max_tokens=2500, model=model)
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+            for data in executor.map(_process_block, enumerate(blocks, 1)):
+                candidates.extend(data.get("candidates") or data.get("clips") or [])
 
         if candidates:
-            cand_lines = []
-            for c in candidates:
-                segs = c.get("segments") or []
-                seg_desc = ", ".join(
-                    f"{s.get('role')}:{s.get('start_word_idx')}-{s.get('end_word_idx')}"
-                    for s in segs
-                ) if segs else f"{c.get('start_word_idx')}–{c.get('end_word_idx')}"
-                cand_lines.append(
-                    f"- {seg_desc}: score={c.get('score', 0)} "
-                    f"title={c.get('title', '')} hook={c.get('hook_text', c.get('hook', ''))} "
-                    f"insight={c.get('insight', '')}"
-                )
-            pick_system = _clip_selection_system(lang_hint, target, duration, len(words))
-            pick_user = (
-                f"Vídeo com {len(words)} palavras ({duration:.0f}s). Meta: {target} cortes.\n"
-                f"Candidatos pré-analisados:\n" + "\n".join(cand_lines) +
-                "\n\nTranscrição completa (word_idx:palavra@tempo):\n" + _transcript_full(words)
-            )
             print(f"[clips] Selecionando melhores cortes entre {len(candidates)} candidatos...", flush=True)
-            data = _openai_json(pick_system, pick_user, max_tokens=6000, model=model)
-            all_raw.extend(data.get("clips") or [])
+            all_raw.extend(candidates)
         else:
             blocks = _transcript_blocks(words)
-            system = _clip_selection_system(lang_hint, target, duration, len(words))
+            system = _clip_selection_system(lang_hint, target, duration, len(words), focuses)
             for block in blocks:
                 data = _openai_json(system, block, max_tokens=3000, model=model)
                 all_raw.extend(data.get("clips") or [])
@@ -678,23 +716,26 @@ def detect_clips(
     duration: float,
     language: str = "auto",
     force: bool = False,
+    focuses: list[str] | None = None,
 ) -> dict:
     if not force:
         cached = load_clips(job_dir)
         if cached and cached.get("clips"):
             return cached
 
+    safe_focuses = _sanitize_focuses(focuses)
+
     if not words:
         prev = load_clips(job_dir) or {}
         payload = _merge_settings(prev)
-        payload.update({"clips": [], "model": get_clips_model(), "manual": False})
+        payload.update({"clips": [], "model": get_clips_model(), "manual": False, "detect_focuses": safe_focuses})
         return save_clips(job_dir, payload)
 
     model_used = get_clips_model()
-    detected = _call_gpt_clips(words, duration, language)
+    detected = _call_gpt_clips(words, duration, language, focuses=safe_focuses)
     if not detected and model_used != FALLBACK_CLIPS_MODEL:
         print(f"[clips] 0 cortes com {model_used} — retentando pipeline com {FALLBACK_CLIPS_MODEL}", flush=True)
-        detected = _call_gpt_clips(words, duration, language, model=FALLBACK_CLIPS_MODEL)
+        detected = _call_gpt_clips(words, duration, language, model=FALLBACK_CLIPS_MODEL, focuses=safe_focuses)
         if detected:
             model_used = FALLBACK_CLIPS_MODEL
 
@@ -705,6 +746,7 @@ def detect_clips(
         "model": model_used,
         "manual": False,
         "detecting": False,
+        "detect_focuses": safe_focuses,
         "detect_error": (
             "Nenhum corte encontrado pela IA — tente Detectar de novo ou use gpt-4o em Configurações."
             if not detected
@@ -743,6 +785,7 @@ def _merge_settings(prev: dict) -> dict:
         "overlay_pos_x",
         "overlay_pos_y", "video_pos_x", "video_pos_y", "ig_bg_color", "ig_text_color",
         "ig_avatar_size", "ig_username_size", "ig_caption_size", "format_presets",
+        "detect_focuses",
     )
     return {k: prev[k] for k in keys if k in prev}
 

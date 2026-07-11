@@ -7,7 +7,7 @@ import tempfile
 from pathlib import Path
 from typing import Callable, Optional
 
-from media import ffmpeg_bin, parse_progress
+from media import ffmpeg_bin, parse_progress, escape_filter_path as _escape_filter_path
 from overlays import (
     ComposeExtras,
     clamp_progress_height_pct,
@@ -28,20 +28,9 @@ def _hw_encoder_available() -> bool:
         return False
     out = subprocess.run(
         [ffmpeg_bin(), "-hide_banner", "-encoders"],
-        capture_output=True, text=True, check=True,
+        capture_output=True, text=True, check=True, timeout=30,
     )
     return "h264_videotoolbox" in out.stdout
-
-
-def _escape_filter_path(path: str) -> str:
-    out = []
-    special = set("\\':,;[]")
-    for ch in path:
-        if ch in special:
-            out.append("\\" + ch)
-        else:
-            out.append(ch)
-    return "".join(out)
 
 
 def _is_image(p: Path) -> bool:
@@ -67,8 +56,8 @@ def _progress_overlay_chain(
     duration: float,
     canvas_w: int,
     canvas_h: int,
-) -> str | None:
-    """Animated progress bar via color+scale+overlay (drawbox has no time variable)."""
+) -> tuple[str, str] | None:
+    """Animated progress bar via color+overlay (much faster than scale=eval=frame)."""
     if not extras.progress_enabled:
         return None
     prog = fake_progress_expr(
@@ -80,11 +69,9 @@ def _progress_overlay_chain(
     color = extras.progress_color.lstrip("#")
     bar_h = max(1, round(canvas_h * h_pct))
     d = max(0.001, duration)
-    return (
-        f"color=c=0x{color}@1:s={canvas_w}x{bar_h}:d={d:.3f},format=rgba[cbar];"
-        f"[cbar]scale=eval=frame:w='max(1,trunc(min({canvas_w},{canvas_w}*({prog}))))':"
-        f"h={bar_h}:flags=fast_bilinear[pbar]"
-    )
+    pb_chain = f"color=c=0x{color}@1:s={canvas_w}x{bar_h}:d={d:.3f},format=rgba[pbar]"
+    x_expr = f"-{canvas_w}+{canvas_w}*({prog})"
+    return pb_chain, x_expr
 
 
 def _append_post_ass_extras(
@@ -108,9 +95,10 @@ def _append_post_ass_extras(
         fg += f";[{out}][logo]overlay={lx}:{ly}[lg]"
         out = "lg"
 
-    pb = _progress_overlay_chain(extras, duration, canvas_w, canvas_h)
-    if pb:
-        fg += f";{pb};[{out}][pbar]overlay=x=0:y=H-h[pb]"
+    pb_info = _progress_overlay_chain(extras, duration, canvas_w, canvas_h)
+    if pb_info:
+        pb_chain, x_expr = pb_info
+        fg += f";{pb_chain};[{out}][pbar]overlay=x='{x_expr}':y=H-h[pb]"
         out = "pb"
 
     return fg, out
@@ -313,7 +301,6 @@ def render_compose(
     duration: float = 0.0,
     on_progress: Optional[Callable[[float, str], None]] = None,
     video_pos: tuple[Optional[float], Optional[float]] = (None, None),
-    highlight_effects: dict | None = None,
     extras: ComposeExtras | None = None,
     profile_path: Path | None = None,
     job_dir: Path | None = None,
@@ -337,12 +324,15 @@ def render_compose(
     phrases: list[dict] = highlight_phrases or []
     out_w, out_h = resolution_dims(resolution, tpl)
 
-    fps = 30.0
+    # Single probe call — extract fps and duration at once.
+    from media import probe_video
     try:
-        from media import probe_video
-        fps = float(probe_video(video).get("fps", 30.0)) or 30.0
+        info = probe_video(video)
+        fps = float(info.get("fps", 30.0)) or 30.0
+        if duration <= 0:
+            duration = info["duration"]
     except Exception:
-        pass
+        fps = 30.0
 
     header_png: Path | None = None
     headline_png: Path | None = None

@@ -167,8 +167,10 @@ export default function TemplatePanel({
               </div>
             </Section>
           )}
+        </>
+      )}
 
-          <label className="flex min-h-[44px] items-center gap-3 rounded-lg border border-border bg-panel/40 px-3 py-2 text-sm text-zinc-300">
+      <label className="flex min-h-[44px] items-center gap-3 rounded-lg border border-border bg-panel/40 px-3 py-2 text-sm text-zinc-300">
             <input type="checkbox" checked={compose.progress_enabled ?? false}
               onChange={(e) => onComposeChange({ progress_enabled: e.target.checked })}
               className="h-4 w-4 rounded border-border" />
@@ -196,8 +198,6 @@ export default function TemplatePanel({
               })}
             </div>
           </Section>
-        </>
-      )}
 
       <input ref={fileInputRef} type="file" accept={overlayAccept} className="hidden"
         onChange={(e) => { const f = e.target.files?.[0]; if (f) handleUpload(f, "overlay"); e.target.value = ""; }} />

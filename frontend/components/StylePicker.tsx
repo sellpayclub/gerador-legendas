@@ -1,9 +1,71 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { listPresets, type StyleConfig } from "@/lib/api";
+import { listPresets, type StyleConfig, type Word } from "@/lib/api";
+import KaraokeLine from "@/components/KaraokeLine";
+import { hexWithAlpha } from "@/lib/colorAlpha";
 import Section from "@/components/ui/Section";
 import { inputClass } from "@/components/ui/inputClass";
+import { clampSubtitlePosition } from "@/lib/subtitlePosition";
+
+const PRESET_SAMPLE_WORDS: Word[] = [
+  { w: "sua", start: 0, end: 0.35 },
+  { w: "legenda", start: 0.35, end: 0.7 },
+  { w: "aqui", start: 0.7, end: 1.05 },
+];
+
+const STYLE_DEFAULTS: StyleConfig = {
+  font: "Roboto",
+  font_size: 72,
+  text_case: "normal",
+  pause_threshold_s: 0.45,
+  primary_color: "#FACC15",
+  secondary_color: "#FFFFFF",
+  outline_color: "#000000",
+  outline_width: 8,
+  shadow: 0,
+  bold: true,
+  italic: false,
+  animation: "pop",
+  pop_scale: 115,
+  pop_duration_ms: 120,
+  box: false,
+  box_color: "#000000",
+  box_opacity: 0.5,
+  pos_x: null,
+  pos_y: null,
+  margin_v: 120,
+  letter_spacing: 2,
+  word_spacing: 4,
+  keyword_scale: 180,
+};
+
+function PresetPreview({ values }: { values: Partial<StyleConfig> }) {
+  const style = { ...STYLE_DEFAULTS, ...values };
+  const scaleY = 0.19;
+  return (
+    <div className="flex min-h-[54px] items-center justify-center overflow-hidden rounded-md bg-gradient-to-b from-zinc-800/90 to-zinc-950 px-2 py-2">
+      <span
+        style={{
+          padding: style.box ? "0.12em 0.45em" : "0",
+          background: style.box
+            ? hexWithAlpha(style.box_color, style.box_opacity ?? 0.5)
+            : "transparent",
+          borderRadius: style.box ? "5px" : "0",
+          display: "inline-block",
+          maxWidth: "100%",
+        }}
+      >
+        <KaraokeLine
+          words={PRESET_SAMPLE_WORDS}
+          style={style}
+          scaleY={scaleY}
+          activeIndex={1}
+        />
+      </span>
+    </div>
+  );
+}
 
 type Props = {
   style: StyleConfig;
@@ -14,6 +76,7 @@ type Props = {
   videoWidth: number;
   position: { x: number | null; y: number | null };
   onPositionChange: (pos: { x: number | null; y: number | null }) => void;
+  defaultPosition?: { x: number; y: number };
 };
 
 const FONTS = ["Roboto", "Open Sans", "Lato", "Raleway", "Inter", "Montserrat"] as const;
@@ -27,6 +90,7 @@ export default function StylePicker({
   videoWidth,
   position,
   onPositionChange,
+  defaultPosition,
 }: Props) {
   const [presets, setPresets] = useState<{ id: string; name: string; values: any }[]>([]);
 
@@ -38,7 +102,17 @@ export default function StylePicker({
 
   const letterSpacing = style.letter_spacing ?? 2;
   const wordSpacing = style.word_spacing ?? 4;
-  const posY = position.y ?? videoHeight - style.margin_v;
+  const marginV = style.margin_v ?? 120;
+  const clampedPos = clampSubtitlePosition(position, videoWidth, videoHeight, marginV);
+  const posY = clampedPos.y;
+  const sliderMin = Math.round(videoHeight * 0.08);
+  const sliderMax = Math.round(videoHeight * 0.92);
+
+  const resetPosition = () => {
+    const def = defaultPosition ?? { x: videoWidth / 2, y: videoHeight - marginV };
+    onPositionChange(def);
+    onChange({ ...style, pos_x: def.x, pos_y: def.y });
+  };
 
   const applyPreset = (values: any) => {
     onChange({ ...style, ...values });
@@ -47,16 +121,16 @@ export default function StylePicker({
   return (
     <div className="space-y-4">
       <Section title="Presets" description="Estilos prontos — clique para aplicar">
-        <div className="grid grid-cols-2 gap-2">
+        <div className="grid max-h-80 grid-cols-1 gap-2 overflow-y-auto overscroll-contain pr-1 sm:grid-cols-2">
           {presets.map((p) => (
             <button
               key={p.id}
               type="button"
               onClick={() => applyPreset(p.values)}
-              className="touch-target rounded-lg border border-border bg-panel px-3 py-2.5 text-left text-sm transition hover:border-accent/50"
+              className="touch-target rounded-lg border border-border bg-panel p-2 text-left transition hover:border-accent/50"
             >
-              <div className="font-medium text-zinc-200">{p.name}</div>
-              <div className="text-xs text-muted">Aplicar preset</div>
+              <PresetPreview values={p.values} />
+              <div className="mt-1.5 truncate text-xs font-medium text-zinc-200">{p.name}</div>
             </button>
           ))}
         </div>
@@ -142,18 +216,26 @@ export default function StylePicker({
         <Field label={`Altura (posição Y): ${Math.round(posY)}px`}>
           <input
             type="range"
-            min={Math.round(videoHeight * 0.15)}
-            max={Math.round(videoHeight * 0.95)}
+            min={sliderMin}
+            max={sliderMax}
             value={Math.round(posY)}
             onChange={(e) => {
               const y = +e.target.value;
               onPositionChange({
-                x: position.x ?? videoWidth / 2,
+                x: clampedPos.x,
                 y,
               });
+              onChange({ ...style, pos_x: clampedPos.x, pos_y: y });
             }}
             className="w-full"
           />
+          <button
+            type="button"
+            onClick={resetPosition}
+            className="mt-2 w-full rounded-lg border border-border bg-panel px-3 py-2 text-xs text-zinc-300 transition hover:border-accent/40 hover:text-zinc-100"
+          >
+            Resetar posição da legenda
+          </button>
         </Field>
         <div className="flex gap-4">
           <label className="flex items-center gap-2 text-sm">
@@ -193,26 +275,42 @@ export default function StylePicker({
 
       <Section title="Animação" collapsible defaultOpen={false}>
         <div className="space-y-3">
-        <div className="flex gap-2">
-          {(["pop", "fade", "none"] as const).map((a) => (
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+          {([
+            ["pop", "Pop"],
+            ["bounce", "Bounce"],
+            ["slide", "Slide"],
+            ["fade", "Fade"],
+            ["none", "Nenhuma"],
+          ] as const).map(([a, label]) => (
             <button
               key={a}
+              type="button"
               onClick={() => set({ animation: a })}
-              className={`flex-1 rounded-lg border px-3 py-2 text-sm ${
+              className={`rounded-lg border px-3 py-2 text-sm ${
                 style.animation === a
                   ? "border-accent bg-accent/10 text-accent"
                   : "border-border bg-panel text-zinc-300"
               }`}
             >
-              {a === "pop" ? "Pop" : a === "fade" ? "Fade" : "Nenhuma"}
+              {label}
             </button>
           ))}
         </div>
-        {style.animation === "pop" && (
-          <Field label={`Escala do pop: ${style.pop_scale}%`}>
+        {(style.animation === "pop" || style.animation === "bounce") && (
+          <Field label={`Escala: ${style.pop_scale}%`}>
             <input
               type="range" min={105} max={150} value={style.pop_scale}
               onChange={(e) => set({ pop_scale: +e.target.value })}
+              className="w-full"
+            />
+          </Field>
+        )}
+        {(style.animation === "bounce" || style.animation === "slide") && (
+          <Field label={`Duração: ${style.pop_duration_ms}ms`}>
+            <input
+              type="range" min={60} max={300} step={10} value={style.pop_duration_ms}
+              onChange={(e) => set({ pop_duration_ms: +e.target.value })}
               className="w-full"
             />
           </Field>

@@ -1,5 +1,26 @@
 # Legendas Automáticas Estilo CapCut — Sistema Local
 
+App web para transcrever vídeos, gerar legendas estilo CapCut e exportar cortes para redes sociais.
+
+> **Comprou o código?** Comece pelo guia para iniciantes: **[GUIA-INSTALACAO.md](./GUIA-INSTALACAO.md)**  
+> Instalação em 3 passos: clonar → colar chave OpenAI no `.env` → `bash install.sh`
+
+## Instalação rápida (compradores)
+
+```bash
+git clone https://github.com/sellpayclub/gerador-legendas.git legendas-locais
+cd legendas-locais
+cp .env.example backend/.env   # edite OPENAI_API_KEY=sk-...
+bash install.sh
+```
+
+- **Mac:** http://localhost:3000 — `./legendas.sh status|reiniciar|logs`
+- **VPS:** o instalador pergunta o domínio e configura HTTPS automaticamente
+
+Detalhes completos: [GUIA-INSTALACAO.md](./GUIA-INSTALACAO.md)
+
+---
+
 App web local (roda em `localhost`) para:
 
 1. Fazer upload de um vídeo (5–30 min)
@@ -142,34 +163,28 @@ Jobs antigos (mais de 7 dias) são apagados automaticamente no startup do backen
 
 ## Deploy VPS (produção)
 
-O app pode rodar em um VPS Ubuntu com frontend + backend + FFmpeg no mesmo servidor.
-A instância de produção atual usa **Traefik** (Docker Swarm) para HTTPS — a VPS já tinha Traefik nas portas 80/443, então o roteamento passa por um proxy nginx no Swarm em vez de nginx do sistema.
+O app hosted (ClipSaaS) roda em **https://app.clipsaas.site** na VPS `161.97.79.7` com Caddy + systemd.
+
+Para white-label em VPS própria, use `install.sh` com seu domínio. Para o SaaS hosted, veja [`DEPLOY-HOSTED.md`](DEPLOY-HOSTED.md).
 
 ### Pré-requisitos
 
-- VPS Ubuntu 22.04+ (ex.: 2 vCPU, 4 GB RAM)
+- VPS Ubuntu 22.04+ (ex.: 4 vCPU, 8 GB RAM)
 - Domínio apontando para o IP da VPS
-- Chave OpenAI em `backend/.env`
+- Hosted: Supabase + Resend + Cakto (ver `DEPLOY-HOSTED.md`)
 
-### DNS
-
-O domínio precisa resolver para o IP da VPS:
+### DNS (ClipSaaS)
 
 ```bash
-dig +short legendas.clonefyia.com
-# deve retornar o IP da VPS (ex.: 161.97.79.7)
+dig +short app.clipsaas.site
+# → 161.97.79.7
 ```
 
-**Opção A — registro A (recomendado):**
-```
-legendas.seudominio.com  →  A  →  IP_DA_VPS
-```
+Registro A:
 
-**Opção B — CNAME:**
 ```
-legendas.seudominio.com  →  CNAME  →  server.seudominio.com
+app.clipsaas.site  →  A  →  161.97.79.7
 ```
-O hostname alvo do CNAME também precisa ter registro A apontando para a VPS.
 
 ### GitHub → VPS
 
@@ -188,7 +203,8 @@ Manutenção detalhada (SSH, logs, update): [`deploy/MANUTENCAO.md`](deploy/MANU
    ```
    OPENAI_API_KEY=sk-...
    TRANSCRIBE_ENGINE=openai
-   ALLOWED_ORIGINS=https://legendas.clonefyia.com
+   ALLOWED_ORIGINS=https://app.clipsaas.site
+   DOMAIN=app.clipsaas.site
    ```
 
 3. Rode o bootstrap:
@@ -218,13 +234,14 @@ cd /opt/legendas-locais && git pull origin main && bash deploy/setup.sh --update
 | `deploy/setup.sh` | Bootstrap e updates |
 | `deploy/legendas-backend.service` | systemd — FastAPI |
 | `deploy/legendas-frontend.service` | systemd — Next.js standalone |
-| `deploy/legendas-stack.yaml` | Traefik + nginx proxy (HTTPS) |
+| `deploy/Caddyfile.template` | HTTPS + reverse proxy (padrão) |
+| `deploy/legendas-stack.yaml` | Traefik + nginx (legado, opcional) |
 | `deploy/legendas-nginx.conf` | Proxy `/` → :3000, `/api` → :8000 |
 
 ### Verificação pós-deploy
 
 ```bash
-curl -s https://legendas.seudominio.com/api/health   # {"ok":true}
+curl -s https://app.clipsaas.site/api/health   # {"ok":true}
 ```
 
 Teste o fluxo completo: upload → transcrever → editar → renderizar → baixar MP4.

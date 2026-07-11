@@ -38,7 +38,7 @@ def cut_video_segment(
         "-movflags", "+faststart",
         str(out),
     ]
-    proc = subprocess.run(cmd, capture_output=True, text=True)
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
     if proc.returncode != 0:
         raise RuntimeError(f"ffmpeg cut failed: {proc.stderr[-600:]}")
 
@@ -66,19 +66,21 @@ def concat_video_segments(paths: list[Path], out: Path) -> None:
     if out.exists():
         out.unlink()
     list_path = out.parent / "concat_list.txt"
-    lines = [f"file '{p.resolve()}'" for p in paths]
+    lines = [f"file '{p.resolve().as_posix().replace(chr(39), chr(39) + chr(92) + chr(39))}'" for p in paths]
     list_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     cmd = [
         ffmpeg_bin(), "-y",
         "-f", "concat", "-safe", "0",
         "-i", str(list_path),
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
-        "-c:a", "aac", "-b:a", "128k",
+        "-c", "copy",
         "-movflags", "+faststart",
         str(out),
     ]
-    proc = subprocess.run(cmd, capture_output=True, text=True)
-    list_path.unlink(missing_ok=True)
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+    try:
+        list_path.unlink(missing_ok=True)
+    except OSError:
+        pass
     if proc.returncode != 0:
         raise RuntimeError(f"ffmpeg concat failed: {proc.stderr[-600:]}")
 
@@ -160,7 +162,12 @@ def render_clip(
 
     tpl = _resolve_template(template, aspect)
 
-    data = json.loads((job_dir / "words.json").read_text(encoding="utf-8"))
+    try:
+        data = json.loads((job_dir / "words.json").read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        raise RuntimeError(f"words.json não encontrado para o job {job_dir.name}")
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"words.json inválido: {exc}")
     if tpl:
         data["width"] = tpl.width
         data["height"] = tpl.height

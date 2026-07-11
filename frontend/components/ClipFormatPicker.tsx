@@ -109,6 +109,15 @@ export function isComposeFormat(fmt: ExportFormatId): boolean {
   return fmt !== "original";
 }
 
+/**
+ * Formats rendered through compose templates use TemplatePreview so the
+ * preview mirrors the FFmpeg crop (video_pos) exactly — including 9:16
+ * full-bleed, which VideoPreview cannot represent (no crop positioning).
+ */
+export function usesTemplatePreview(fmt: ExportFormatId): boolean {
+  return fmt === "reels_full" || fmt === "choquei_image" || fmt === "choquei_video";
+}
+
 export function needsOverlay(fmt: ExportFormatId): boolean {
   return fmt === "choquei_image" || fmt === "choquei_video";
 }

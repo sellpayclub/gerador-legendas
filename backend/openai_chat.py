@@ -63,22 +63,65 @@ def post_chat_completion(
     timeout: int = 120,
 ) -> dict[str, Any]:
     import requests
+    import time
+    import re
 
-    resp = requests.post(
-        get_openai_chat_url(),
-        headers={"Authorization": f"Bearer {get_openai_api_key()}", "Content-Type": "application/json"},
-        json=build_chat_payload(
-            model,
-            messages,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            response_format=response_format,
-        ),
-        timeout=timeout,
+    url = get_openai_chat_url()
+    headers = {"Authorization": f"Bearer {get_openai_api_key()}", "Content-Type": "application/json"}
+    payload = build_chat_payload(
+        model,
+        messages,
+        max_tokens=max_tokens,
+        temperature=temperature,
+        response_format=response_format,
     )
-    if resp.status_code != 200:
-        raise RuntimeError(f"OpenAI chat error {resp.status_code}: {resp.text[:400]}")
-    return resp.json()
+
+    max_retries = 5
+    for attempt in range(max_retries):
+        try:
+            resp = requests.post(url, headers=headers, json=payload, timeout=timeout)
+        except requests.exceptions.RequestException as exc:
+            wait_time = 15.0 * (attempt + 1)
+            print(f"[openai_chat] Network error ({type(exc).__name__}). Aguardando {wait_time:.1f}s (tentativa {attempt + 1}/{max_retries})...", flush=True)
+            time.sleep(wait_time)
+            continue
+            
+        if resp.status_code == 429:
+            wait_time = 15.0 * (attempt + 1)
+            retry_after = resp.headers.get("Retry-After") or resp.headers.get("x-ratelimit-reset-requests")
+            
+            if retry_after:
+                try:
+                    # x-ratelimit-reset-requests can be "1s" or "6m0s"
+                    if "s" in retry_after or "m" in retry_after:
+                        match = re.search(r"(?:(\d+)m)?(?:(\d+)s)?", retry_after)
+                        if match:
+                            m = int(match.group(1) or 0)
+                            s = int(match.group(2) or 0)
+                            wait_time = float(m * 60 + s)
+                    else:
+                        wait_time = float(retry_after)
+                except ValueError:
+                    pass
+            else:
+                try:
+                    # Parse error message e.g. "Tente novamente em 42,976s" or "try again in 42.9s"
+                    error_msg = resp.json().get("error", {}).get("message", "")
+                    match = re.search(r"(?:try again in|Tente novamente em) ([\d.,]+)s", error_msg)
+                    if match:
+                        wait_time = float(match.group(1).replace(",", "."))
+                except Exception:
+                    pass
+            
+            print(f"[openai_chat] API Rate Limit (429). Aguardando {wait_time:.1f}s (tentativa {attempt + 1}/{max_retries})...", flush=True)
+            time.sleep(wait_time)
+            continue
+            
+        if resp.status_code != 200:
+            raise RuntimeError(f"OpenAI chat error {resp.status_code}: {resp.text[:400]}")
+        return resp.json()
+    
+    raise RuntimeError("OpenAI chat error: Excedeu limite de tentativas (429 Rate Limit).")
 
 
 def chat_message_content(data: dict[str, Any]) -> str:

@@ -64,10 +64,16 @@ export function subtitleTextStyle(
   const ls = playResToCss(style.letter_spacing ?? 2, scaleY);
   const spaceCount = 1 + Math.floor((style.word_spacing ?? 4) / 4);
   const wordGapEm = spaceCount * 0.28;
+  const anim = style.animation ?? "pop";
+  const scaled = anim === "pop" || anim === "bounce";
   const pop =
-    opts.isActive && style.animation === "pop"
+    opts.isActive && scaled
       ? `scale(${style.pop_scale / 100})`
-      : "scale(1)";
+      : opts.isActive && anim === "slide"
+        ? "translateY(0)"
+        : anim === "slide"
+          ? "translateY(3px)"
+          : "scale(1)";
 
   return {
     color: opts.color,
@@ -78,9 +84,13 @@ export function subtitleTextStyle(
     letterSpacing: `${ls}px`,
     marginRight: opts.isLastInGroup ? 0 : `${wordGapEm}em`,
     lineHeight: 1.15,
-    display: opts.isActive && style.animation === "pop" ? "inline-block" : "inline",
+    display: opts.isActive && scaled ? "inline-block" : "inline",
     transform: pop,
-    transition: opts.isActive && style.animation === "pop" ? "transform 80ms ease-out" : undefined,
+    opacity: opts.isActive && anim === "fade" ? 1 : anim === "fade" && !opts.isActive ? 0.72 : undefined,
+    transition:
+      opts.isActive && (scaled || anim === "slide" || anim === "fade")
+        ? "transform 120ms ease-out, opacity 120ms ease-out"
+        : undefined,
   };
 }
 
@@ -113,12 +123,22 @@ export function findActiveGroup(
     }
   }
 
-  // Static preview only before speech starts (style editing at t≈0).
-  if (opts?.staticPreview) {
-    const firstStart = windows[0]?.start ?? groups[0][0].start;
-    if (currentTime < firstStart + 0.001) {
-      return { group: groups[0], activeIdx: words.indexOf(groups[0][0]) };
+  // Editing preview: keep the nearest line visible between words / while paused.
+  if (opts?.staticPreview && groups.length) {
+    let nearestGi = 0;
+    let nearestDist = Infinity;
+    for (let gi = 0; gi < groups.length; gi++) {
+      const { start, end } = windows[gi];
+      const mid = (start + end) / 2;
+      const dist = Math.abs(currentTime - mid);
+      if (dist < nearestDist) {
+        nearestDist = dist;
+        nearestGi = gi;
+      }
     }
+    const g = groups[nearestGi];
+    const idx = activeIdx >= 0 ? activeIdx : Math.max(0, words.indexOf(g[0]));
+    return { group: g, activeIdx: idx };
   }
 
   return { group: null, activeIdx: -1 };

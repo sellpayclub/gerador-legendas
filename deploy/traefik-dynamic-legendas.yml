@@ -1,4 +1,5 @@
-# Traefik file provider — long timeouts for video upload (2 GB).
+# Traefik file provider — long timeouts for video upload (unlimited body via nginx client_max_body_size 0).
+# Do NOT enable buffering middleware here — it breaks streaming uploads and causes 413.
 # Copy to Traefik's dynamic config dir (e.g. /etc/traefik/dynamic/).
 # setup.sh tries common paths automatically.
 
@@ -7,12 +8,5 @@ http:
     legendas-long:
       forwardingTimeouts:
         dialTimeout: 30s
-        responseHeaderTimeout: 3600s
-        idleTimeout: 3600s
-
-  middlewares:
-    legendas-upload:
-      buffering:
-        maxRequestBodyBytes: 2147483648
-        memRequestBodyBytes: 104857600
-        maxResponseBodyBytes: 0
+        responseHeaderTimeout: 7200s
+        idleTimeout: 7200s

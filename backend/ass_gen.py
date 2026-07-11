@@ -32,14 +32,14 @@ _EMOJI_CHAR_RE = re.compile(
 def _hex_to_ass(color_hex: str) -> str:
     s = color_hex.lstrip("#")
     if len(s) == 8:
-        a = int(s[0:2], 16)
-        r, g, b = s[2:4], s[4:6], s[6:8]
+        # CSS #RRGGBBAA format (alpha is LAST two digits)
+        r, g, b, a = s[0:2], s[2:4], s[4:6], s[6:8]
     elif len(s) == 6:
-        a = 0xFF
+        a = "FF"
         r, g, b = s[0:2], s[2:4], s[4:6]
     else:
         return "&H00FFFFFF&"
-    aa = 255 - a
+    aa = 255 - int(a, 16)
     return f"&H{aa:02X}{b}{g}{r}&".upper()
 
 
@@ -124,6 +124,18 @@ def _pos_and_anim(cfg: StyleConfig, width: int, height: int) -> str:
             f"\\t(0,{d // 2},\\fscx{s}\\fscy{s})"
             f"\\t({d // 2},{d},\\fscx100\\fscy100)"
         )
+    elif cfg.animation == "bounce":
+        d = max(80, cfg.pop_duration_ms)
+        s = cfg.pop_scale
+        mid = 100 + (s - 100) // 2
+        anim = (
+            f"\\t(0,{d // 3},\\fscx{s}\\fscy{s})"
+            f"\\t({d // 3},{2 * d // 3},\\fscx{mid}\\fscy{mid})"
+            f"\\t({2 * d // 3},{d},\\fscx100\\fscy100)"
+        )
+    elif cfg.animation == "slide":
+        d = max(60, cfg.pop_duration_ms)
+        anim = f"\\fad({d},40)"
     elif cfg.animation == "fade":
         anim = "\\fad(40,30)"
     outline = ""

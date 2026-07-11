@@ -2,52 +2,62 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { ArrowLeft, CheckCircle2, Loader2, XCircle } from "lucide-react";
+import { ArrowLeft, CheckCircle2, ChevronDown, GraduationCap, Loader2, XCircle } from "lucide-react";
+import { createClient } from "@/lib/supabase/client";
 import {
   getSettings,
+  getMe,
   testOpenAI,
+  testMeOpenAI,
   updateSettings,
+  updateMeSettings,
   type AppSettingsPublic,
+  type MeProfile,
 } from "@/lib/api";
+import { isMultiTenant } from "@/lib/hosted";
 import Field from "@/components/ui/Field";
 import Panel from "@/components/ui/Panel";
 import HintBanner from "@/components/ui/HintBanner";
 import { inputClass } from "@/components/ui/inputClass";
-
-const CLIPS_MODELS = ["gpt-4o", "gpt-5.5", "gpt-4o-mini"];
-const AUX_MODELS = ["gpt-4o-mini", "gpt-4o", "gpt-5.5"];
-const WHISPER_MODELS = ["whisper-1"];
+import AppTopNav from "@/components/AppTopNav";
 
 export default function ConfiguracoesPage() {
   const [settings, setSettings] = useState<AppSettingsPublic | null>(null);
+  const [me, setMe] = useState<MeProfile | null>(null);
+  const [hosted, setHosted] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [passwordSaving, setPasswordSaving] = useState(false);
+  const [passwordSaved, setPasswordSaved] = useState(false);
+  const [passwordError, setPasswordError] = useState<string | null>(null);
 
   const [apiKey, setApiKey] = useState("");
   const [transcribeEngine, setTranscribeEngine] = useState("openai");
-  const [openaiModel, setOpenaiModel] = useState("whisper-1");
-  const [clipsModel, setClipsModel] = useState("gpt-4o");
-  const [keywordsModel, setKeywordsModel] = useState("gpt-4o-mini");
-  const [enrichModel, setEnrichModel] = useState("gpt-4o-mini");
-  const [publicDomain, setPublicDomain] = useState("");
   const [openaiBaseUrl, setOpenaiBaseUrl] = useState("");
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
+      if (isMultiTenant()) {
+        setHosted(true);
+        const profile = await getMe();
+        setMe(profile);
+        setSettings(null);
+        setApiKey("");
+        return;
+      }
       const s = await getSettings();
       setSettings(s);
       setTranscribeEngine(s.transcribe_engine || "openai");
-      setOpenaiModel(s.openai_model || "whisper-1");
-      setClipsModel(s.clips_model || "gpt-4o");
-      setKeywordsModel(s.keywords_model || "gpt-4o-mini");
-      setEnrichModel(s.enrich_model || "gpt-4o-mini");
-      setPublicDomain(s.public_domain || "");
       setOpenaiBaseUrl(s.openai_base_url || "");
       setApiKey("");
     } catch (e: unknown) {
@@ -67,15 +77,20 @@ export default function ConfiguracoesPage() {
     setSaved(false);
     setTestResult(null);
     try {
+      if (hosted) {
+        if (!apiKey.trim()) {
+          throw new Error("Informe sua API key OpenAI.");
+        }
+        await updateMeSettings(apiKey.trim());
+        const profile = await getMe();
+        setMe(profile);
+        setApiKey("");
+        setSaved(true);
+        return;
+      }
       const payload: Record<string, string> = {
         transcribe_engine: transcribeEngine,
-        openai_model: openaiModel,
-        clips_model: clipsModel,
-        keywords_model: keywordsModel,
-        enrich_model: enrichModel,
-        public_domain: publicDomain.trim(),
         openai_base_url: openaiBaseUrl.trim(),
-        llm_provider: "openai",
       };
       if (apiKey.trim()) {
         payload.openai_api_key = apiKey.trim();
@@ -91,13 +106,39 @@ export default function ConfiguracoesPage() {
     }
   };
 
+  const handleChangePassword = async () => {
+    if (newPassword.length < 6) {
+      setPasswordError("A senha deve ter pelo menos 6 caracteres.");
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setPasswordError("As senhas não coincidem.");
+      return;
+    }
+    setPasswordSaving(true);
+    setPasswordError(null);
+    setPasswordSaved(false);
+    try {
+      const supabase = createClient();
+      const { error: err } = await supabase.auth.updateUser({ password: newPassword });
+      if (err) throw err;
+      setNewPassword("");
+      setConfirmPassword("");
+      setPasswordSaved(true);
+    } catch (e: unknown) {
+      setPasswordError(e instanceof Error ? e.message : "Erro ao alterar senha");
+    } finally {
+      setPasswordSaving(false);
+    }
+  };
+
   const handleTest = async () => {
     setTesting(true);
     setTestResult(null);
     setError(null);
     try {
       const key = apiKey.trim() || undefined;
-      const r = await testOpenAI(key);
+      const r = hosted ? await testMeOpenAI(key) : await testOpenAI(key);
       setTestResult(r);
     } catch (e: unknown) {
       setTestResult({ ok: false, message: e instanceof Error ? e.message : "Falha no teste" });
@@ -108,9 +149,12 @@ export default function ConfiguracoesPage() {
 
   const mlxBlocked =
     transcribeEngine === "mlx" && settings !== null && !settings.mlx_available;
+  const showMlxOption = settings?.mlx_available ?? false;
 
   return (
     <main className="mx-auto max-w-2xl py-6">
+      <AppTopNav maxWidth="max-w-2xl" />
+
       <div className="mb-6 flex items-center justify-between gap-4">
         <Link
           href="/"
@@ -120,7 +164,13 @@ export default function ConfiguracoesPage() {
           Voltar
         </Link>
         <h1 className="text-xl font-bold text-zinc-100">Configurações</h1>
-        <span className="w-16" />
+        <Link
+          href="/aulas"
+          className="inline-flex items-center gap-1.5 text-sm text-accent hover:underline"
+        >
+          <GraduationCap className="h-4 w-4" />
+          Aulas
+        </Link>
       </div>
 
       {loading ? (
@@ -129,14 +179,129 @@ export default function ConfiguracoesPage() {
         </div>
       ) : (
         <div className="space-y-6">
-          {settings?.source === "env" && (
+          {hosted && me && (
+            <>
+              <HintBanner>
+                Sua chave OpenAI — a cobrança vai direto na sua conta OpenAI. Conta:{" "}
+                <strong>{me.email}</strong>
+                {me.access_active ? "" : " (plano inativo — upload bloqueado)"}
+                {" — "}
+                <Link href="/aulas" className="text-accent underline">
+                  ver Aula 01
+                </Link>
+              </HintBanner>
+              <Panel className="space-y-5">
+                <div>
+                  <h2 className="text-sm font-semibold text-zinc-200">Conta e senha</h2>
+                  <p className="mt-1 text-xs text-muted">
+                    Altere sua senha de acesso ou defina uma se entrou apenas pelo link do e-mail.
+                  </p>
+                </div>
+                <Field label="Nova senha">
+                  <input
+                    type="password"
+                    autoComplete="new-password"
+                    className={inputClass}
+                    value={newPassword}
+                    onChange={(e) => setNewPassword(e.target.value)}
+                    placeholder="Mínimo 6 caracteres"
+                  />
+                </Field>
+                <Field label="Confirmar nova senha">
+                  <input
+                    type="password"
+                    autoComplete="new-password"
+                    className={inputClass}
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                  />
+                </Field>
+                <div className="flex flex-wrap gap-3">
+                  <button
+                    type="button"
+                    onClick={handleChangePassword}
+                    disabled={passwordSaving || !newPassword.trim()}
+                    className="rounded-lg border border-border px-4 py-2 text-sm disabled:opacity-60"
+                  >
+                    {passwordSaving ? "Salvando..." : "Alterar senha"}
+                  </button>
+                  <Link
+                    href="/login/esqueci-senha"
+                    className="inline-flex items-center px-2 py-2 text-sm text-accent hover:underline"
+                  >
+                    Esqueci minha senha
+                  </Link>
+                </div>
+                {passwordSaved && (
+                  <p className="text-sm text-green-400">Senha alterada com sucesso.</p>
+                )}
+                {passwordError && (
+                  <p className="text-sm text-red-400">{passwordError}</p>
+                )}
+              </Panel>
+              <Panel className="space-y-5">
+                <Field
+                  label="API Key OpenAI"
+                  hint={
+                    me.openai_configured
+                      ? "Chave já configurada — cole uma nova para substituir"
+                      : "Cole sua chave sk-..."
+                  }
+                >
+                  <input
+                    type="password"
+                    autoComplete="off"
+                    className={inputClass}
+                    value={apiKey}
+                    onChange={(e) => setApiKey(e.target.value)}
+                    placeholder="sk-..."
+                  />
+                </Field>
+                <div className="flex flex-wrap gap-3">
+                  <button
+                    type="button"
+                    onClick={handleSave}
+                    disabled={saving}
+                    className="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-zinc-950 disabled:opacity-60"
+                  >
+                    {saving ? "Salvando..." : "Salvar chave"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleTest}
+                    disabled={testing}
+                    className="rounded-lg border border-border px-4 py-2 text-sm disabled:opacity-60"
+                  >
+                    {testing ? "Testando..." : "Testar conexão"}
+                  </button>
+                </div>
+                {saved && (
+                  <p className="text-sm text-green-400">Chave salva com sucesso.</p>
+                )}
+                {testResult && (
+                  <p className={`text-sm ${testResult.ok ? "text-green-400" : "text-red-400"}`}>
+                    {testResult.message}
+                  </p>
+                )}
+              </Panel>
+            </>
+          )}
+
+          {!hosted && settings?.source === "env" && (
             <HintBanner>
               Chave detectada em <code className="text-accent">backend/.env</code>. Salve aqui para
-              migrar para o arquivo de configuração da interface.
+              migrar para o arquivo de configuração da interface (recomendado).
             </HintBanner>
           )}
 
-          {settings?.warnings.map((w) => (
+          {!hosted && settings?.source === "both" && (
+            <HintBanner>
+              Configure <strong>só aqui</strong> ou só no <code className="text-accent">backend/.env</code> —
+              não os dois ao mesmo tempo.
+            </HintBanner>
+          )}
+
+          {!hosted && settings?.warnings.map((w) => (
             <div
               key={w}
               className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-200"
@@ -145,11 +310,23 @@ export default function ConfiguracoesPage() {
             </div>
           ))}
 
+          {!hosted && (
+          <>
           <Panel className="space-y-5">
             <div>
               <h2 className="text-sm font-semibold text-zinc-200">OpenAI</h2>
               <p className="mt-1 text-xs text-muted">
-                Uma chave cobre transcrição (Whisper) e IA de cortes, keywords e enrich.
+                Uma chave cobre transcrição, detecção de cortes e demais funções de IA.
+                Crie em{" "}
+                <a
+                  href="https://platform.openai.com/api-keys"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-accent underline"
+                >
+                  platform.openai.com
+                </a>
+                .
               </p>
             </div>
 
@@ -158,7 +335,7 @@ export default function ConfiguracoesPage() {
               hint={
                 settings?.openai_api_key_set
                   ? `Atual: ${settings.openai_api_key_masked || "configurada"} — deixe em branco para manter`
-                  : "Cole sua chave sk-... da OpenAI"
+                  : "Cole sua chave sk-..."
               }
             >
               <input
@@ -202,122 +379,66 @@ export default function ConfiguracoesPage() {
                 </span>
               )}
             </div>
-
-            <Field
-              label="URL base (opcional)"
-              hint="Deixe vazio para api.openai.com. Use para APIs compatíveis com OpenAI no futuro."
-            >
-              <input
-                type="url"
-                value={openaiBaseUrl}
-                onChange={(e) => setOpenaiBaseUrl(e.target.value)}
-                placeholder="https://api.openai.com/v1"
-                className={inputClass}
-              />
-            </Field>
           </Panel>
 
-          <Panel className="space-y-5">
-            <div>
-              <h2 className="text-sm font-semibold text-zinc-200">Transcrição</h2>
-            </div>
+          <Panel className="space-y-3">
+            <button
+              type="button"
+              onClick={() => setAdvancedOpen((o) => !o)}
+              className="flex w-full items-center justify-between text-left"
+            >
+              <div>
+                <h2 className="text-sm font-semibold text-zinc-200">Avançado (opcional)</h2>
+                <p className="mt-0.5 text-xs text-muted">
+                  Motor de transcrição no Mac e URL alternativa da OpenAI
+                </p>
+              </div>
+              <ChevronDown
+                className={`h-5 w-5 shrink-0 text-muted transition ${advancedOpen ? "rotate-180" : ""}`}
+              />
+            </button>
 
-            <Field label="Motor">
-              <select
-                value={transcribeEngine}
-                onChange={(e) => setTranscribeEngine(e.target.value)}
-                className={inputClass}
-              >
-                <option value="openai">OpenAI Whisper (recomendado — Mac e VPS)</option>
-                <option value="mlx">MLX local (somente Mac Apple Silicon)</option>
-              </select>
-            </Field>
+            {advancedOpen && (
+              <div className="space-y-4 border-t border-border pt-4">
+                {showMlxOption && (
+                  <>
+                    <Field label="Motor de transcrição">
+                      <select
+                        value={transcribeEngine}
+                        onChange={(e) => setTranscribeEngine(e.target.value)}
+                        className={inputClass}
+                      >
+                        <option value="openai">OpenAI Whisper (recomendado)</option>
+                        <option value="mlx">MLX local (Mac Apple Silicon, sem custo de API)</option>
+                      </select>
+                    </Field>
+                    {mlxBlocked && (
+                      <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-300">
+                        MLX não está disponível neste servidor. Use OpenAI Whisper.
+                      </div>
+                    )}
+                  </>
+                )}
 
-            {mlxBlocked && (
-              <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-300">
-                MLX não está disponível neste servidor ({settings?.platform}). Use OpenAI Whisper na VPS.
+                <Field
+                  label="URL base OpenAI"
+                  hint="Deixe vazio para api.openai.com. Só altere se usar proxy compatível."
+                >
+                  <input
+                    type="url"
+                    value={openaiBaseUrl}
+                    onChange={(e) => setOpenaiBaseUrl(e.target.value)}
+                    placeholder="https://api.openai.com/v1"
+                    className={inputClass}
+                  />
+                </Field>
+
+                <p className="text-xs text-muted">
+                  Modelos de IA (cortes, keywords) usam padrões automáticos: gpt-4o e gpt-4o-mini.
+                  Na VPS, domínio e HTTPS são configurados na instalação — não é necessário alterar aqui.
+                </p>
               </div>
             )}
-
-            <Field label="Modelo Whisper">
-              <select
-                value={openaiModel}
-                onChange={(e) => setOpenaiModel(e.target.value)}
-                className={inputClass}
-                disabled={transcribeEngine !== "openai"}
-              >
-                {WHISPER_MODELS.map((m) => (
-                  <option key={m} value={m}>
-                    {m}
-                  </option>
-                ))}
-              </select>
-            </Field>
-          </Panel>
-
-          <Panel className="space-y-5">
-            <div>
-              <h2 className="text-sm font-semibold text-zinc-200">Modelos de IA</h2>
-            </div>
-
-            <Field label="Detecção de cortes" hint="gpt-4o — recomendado (rápido e estável). gpt-5.5 pode falhar em vídeos longos.">
-              <select value={clipsModel} onChange={(e) => setClipsModel(e.target.value)} className={inputClass}>
-                {CLIPS_MODELS.map((m) => (
-                  <option key={m} value={m}>
-                    {m}
-                  </option>
-                ))}
-              </select>
-            </Field>
-
-            <Field label="Keywords (destaque de palavras)">
-              <select
-                value={keywordsModel}
-                onChange={(e) => setKeywordsModel(e.target.value)}
-                className={inputClass}
-              >
-                {AUX_MODELS.map((m) => (
-                  <option key={m} value={m}>
-                    {m}
-                  </option>
-                ))}
-              </select>
-            </Field>
-
-            <Field label="Enrich (pontuação e emojis)">
-              <select value={enrichModel} onChange={(e) => setEnrichModel(e.target.value)} className={inputClass}>
-                {AUX_MODELS.map((m) => (
-                  <option key={m} value={m}>
-                    {m}
-                  </option>
-                ))}
-              </select>
-            </Field>
-          </Panel>
-
-          <Panel className="space-y-5">
-            <div>
-              <h2 className="text-sm font-semibold text-zinc-200">Domínio (VPS)</h2>
-              <p className="mt-1 text-xs text-muted">
-                Se instalou em um servidor com domínio próprio, informe aqui. Uso local pode ficar em branco.
-              </p>
-            </div>
-
-            <Field label="URL pública" hint="Ex: https://legendas.seudominio.com">
-              <input
-                type="text"
-                value={publicDomain}
-                onChange={(e) => setPublicDomain(e.target.value)}
-                placeholder="https://meudominio.com"
-                className={inputClass}
-              />
-            </Field>
-
-            {settings?.allowed_origins.length ? (
-              <p className="text-xs text-muted">
-                Origins CORS: {settings.allowed_origins.join(", ")}
-              </p>
-            ) : null}
           </Panel>
 
           {error && (
@@ -344,9 +465,17 @@ export default function ConfiguracoesPage() {
                 Salvando...
               </span>
             ) : (
-              "Salvar configurações"
+              "Salvar"
             )}
           </button>
+          </>
+          )}
+
+          {error && (
+            <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300">
+              {error}
+            </div>
+          )}
         </div>
       )}
     </main>

@@ -11,10 +11,12 @@ import CortesStepBar, { type CortesStep } from "@/components/CortesStepBar";
 import ClipExportPanel from "@/components/ClipExportPanel";
 import ClipFormatPicker, {
   backendToFormat,
+  defaultPositionForTemplate,
   formatToBackend,
   isComposeFormat,
   needsOverlay,
   templateForFormat,
+  usesTemplatePreview,
 } from "@/components/ClipFormatPicker";
 import ClipComposePanel from "@/components/ClipComposePanel";
 import TemplatePreview from "@/components/TemplatePreview";
@@ -40,6 +42,7 @@ import {
   startClipsRender,
   startTranscribe,
   waitForClips,
+  type ClipFocusType,
   type ClipSegment,
   type ComposeSettings,
   type ExportFormatId,
@@ -54,12 +57,15 @@ import { useJobEvents } from "@/lib/useJobEvents";
 import { DEFAULT_COMPOSE } from "@/lib/composeDefaults";
 import {
   applyFormatSnapshot,
+  canvasSizeForFormat,
+  clampSnapshotPosition,
   composeToSettingsPatch,
   defaultSnapshotForFormat,
   parseFormatPresets,
   snapshotFromState,
   type CortesFormatPresets,
 } from "@/lib/cortesFormatCache";
+import { STATIC_TEMPLATES } from "@/lib/staticTemplates";
 import {
   clipWordsToSourceWords,
   exportTimeToSourceTime,
@@ -136,7 +142,7 @@ export default function CortesPage() {
   const [wordsPerLine, setWordsPerLine] = useState(4);
   const [aspect, setAspect] = useState<"original" | "vertical">("vertical");
   const [exportFormat, setExportFormat] = useState<ExportFormatId>("reels_full");
-  const [templates, setTemplates] = useState<TemplateInfo[]>([]);
+  const [templates, setTemplates] = useState<TemplateInfo[]>(STATIC_TEMPLATES);
   const [compose, setCompose] = useState<ComposeSettings>(DEFAULT_COMPOSE_LOCAL);
   const [videoPos, setVideoPos] = useState({ x: 0.5, y: 0.5 });
   const [position, setPosition] = useState<{ x: number | null; y: number | null }>({
@@ -155,11 +161,17 @@ export default function CortesPage() {
   const [detecting, setDetecting] = useState(false);
   const [detectPhase, setDetectPhase] = useState<"working" | "success">("working");
   const [detectClipCount, setDetectClipCount] = useState(0);
+  const [detectFocuses, setDetectFocuses] = useState<ClipFocusType[]>([]);
   const [renderingAll, setRenderingAll] = useState(false);
   const [renderingIds, setRenderingIds] = useState<Set<string>>(new Set());
   const [settingsReady, setSettingsReady] = useState(false);
 
-  const videoControlsRef = useRef<{ seek: (t: number) => void; getCurrentTime: () => number } | null>(null);
+  const videoControlsRef = useRef<{
+    seek: (t: number, opts?: { play?: boolean }) => void;
+    play: () => void;
+    pause: () => void;
+    getCurrentTime: () => number;
+  } | null>(null);
   const retriedTranscribe = useRef(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const clipWordsCache = useRef<Record<string, Word[]>>({});
@@ -263,6 +275,9 @@ export default function CortesPage() {
         }
         if (clipsData?.detecting) {
           resumeDetectRef.current = true;
+        }
+        if (Array.isArray(clipsData?.detect_focuses)) {
+          setDetectFocuses(clipsData!.detect_focuses as ClipFocusType[]);
         }
 
         formatCacheRef.current = parseFormatPresets(clipsData?.format_presets);
@@ -382,8 +397,14 @@ export default function CortesPage() {
   const previewClip = activeClip ?? enabledClips[0] ?? null;
 
   const previewWords = useMemo(() => {
-    if (step >= 2 && previewClip && clipWords.length) {
-      return clipWordsToSourceWords(previewClip, clipWords);
+    if (step >= 2 && previewClip) {
+      const cw =
+        clipWords.length > 0
+          ? clipWords
+          : clipWordsCache.current[previewClip.id] ?? [];
+      if (cw.length > 0) {
+        return clipWordsToSourceWords(previewClip, cw);
+      }
     }
     return words;
   }, [step, previewClip, clipWords, words]);
@@ -410,17 +431,23 @@ export default function CortesPage() {
   }, [exportFormat, templates]);
 
   const previewSize = useMemo(() => {
-    if (step >= 2 && activeTemplate) {
-      return { width: activeTemplate.width, height: activeTemplate.height };
+    const vw = wordsData?.width ?? job?.width ?? 1920;
+    const vh = wordsData?.height ?? job?.height ?? 1080;
+    if (step >= 2 && exportFormat !== "original") {
+      return canvasSizeForFormat(exportFormat, templates, vw, vh);
     }
-    if (step >= 2 && exportFormat === "reels_full") {
-      return { width: 1080, height: 1920 };
-    }
-    return {
-      width: wordsData?.width ?? 1920,
-      height: wordsData?.height ?? 1080,
-    };
-  }, [step, exportFormat, activeTemplate, wordsData]);
+    return { width: vw, height: vh };
+  }, [step, exportFormat, templates, wordsData, job?.width, job?.height]);
+
+  const defaultSubtitlePos = useMemo(
+    () => defaultPositionForTemplate(
+      activeTemplate,
+      previewSize.width,
+      previewSize.height,
+      style.margin_v ?? 120,
+    ),
+    [activeTemplate, previewSize.width, previewSize.height, style.margin_v],
+  );
 
   const previewCompose = useMemo(() => ({
     ...compose,
@@ -457,8 +484,13 @@ export default function CortesPage() {
       setClipList(next);
       try {
         await saveClips(jobId, next);
-      } catch {
-        /* ignore */
+        setError((prev) => (prev?.startsWith("Não foi possível salvar") ? null : prev));
+      } catch (e: unknown) {
+        setError(
+          e instanceof Error && e.message
+            ? `Não foi possível salvar os cortes: ${e.message}`
+            : "Não foi possível salvar os cortes — verifique sua conexão e tente novamente.",
+        );
       }
     },
     [jobId],
@@ -516,8 +548,13 @@ export default function CortesPage() {
           ig_caption_size: composePayload.ig_caption_size,
           format_presets: patch.format_presets ?? formatCacheRef.current,
         });
-      } catch {
-        /* ignore */
+        setError((prev) => (prev?.startsWith("Não foi possível salvar") ? null : prev));
+      } catch (e: unknown) {
+        setError(
+          e instanceof Error && e.message
+            ? `Não foi possível salvar as configurações: ${e.message}`
+            : "Não foi possível salvar as configurações — verifique sua conexão e tente novamente.",
+        );
       }
     },
     [jobId, style, wordsPerLine, exportFormat, position, highlightEnabled, compose, videoPos, settingsReady],
@@ -539,44 +576,55 @@ export default function CortesPage() {
       formatCacheRef.current[exportFormat] = snapshotFromState(position, style, compose, videoPos);
 
       const { aspect: nextAspect, template: nextTemplate } = formatToBackend(fmt);
-      const vw = wordsData?.width ?? 1920;
-      const vh = wordsData?.height ?? 1080;
+      const vw = wordsData?.width ?? job?.width ?? 1920;
+      const vh = wordsData?.height ?? job?.height ?? 1080;
+
+      const canvas = canvasSizeForFormat(fmt, templates, vw, vh);
 
       const cached = formatCacheRef.current[fmt];
-      const snap = cached ?? defaultSnapshotForFormat(fmt, templates, vw, vh, style, compose);
+      // Clamp cached positions to the target canvas (snapshots may come from a
+      // format with different dimensions).
+      const snap = cached
+        ? clampSnapshotPosition(cached, canvas.width, canvas.height, style.margin_v ?? 120)
+        : defaultSnapshotForFormat(fmt, templates, canvas.width, canvas.height, style, compose);
       const applied = applyFormatSnapshot(snap);
 
       setExportFormat(fmt);
       setAspect(nextAspect);
       setPosition(applied.position);
       setStyle((s) => ({ ...s, ...applied.style }));
-      setCompose(applied.compose);
+      setCompose((c) => ({
+        ...applied.compose,
+        // Keep overlay from active clip when switching formats.
+        overlay_asset: previewClip?.overlay_asset ?? applied.compose.overlay_asset ?? c.overlay_asset,
+      }));
       setVideoPos(applied.videoPos);
 
       formatCacheRef.current[fmt] = snap;
 
-      void persistSettings({
-        aspect: nextAspect,
-        template: nextTemplate,
-        style: { ...style, ...applied.style },
-        ...composeToSettingsPatch(applied.compose),
-        format_presets: { ...formatCacheRef.current },
+      requestAnimationFrame(() => {
+        void persistSettings({
+          aspect: nextAspect,
+          template: nextTemplate,
+          style: { ...style, ...applied.style },
+          ...composeToSettingsPatch(applied.compose),
+          format_presets: { ...formatCacheRef.current },
+        });
       });
     },
-    [exportFormat, position, style, compose, videoPos, wordsData, templates, persistSettings],
+    [exportFormat, position, style, compose, videoPos, wordsData, job?.width, job?.height, templates, persistSettings, previewClip?.overlay_asset],
   );
 
   const handleComposeChange = useCallback(
     (patch: Partial<ComposeSettings>) => {
       if ("overlay_asset" in patch && activeClipId) {
-        persistClips(
+        void persistClips(
           clipList.map((c) =>
             c.id === activeClipId
               ? { ...c, overlay_asset: patch.overlay_asset ?? null }
               : c,
           ),
         );
-        return;
       }
       setCompose((c) => ({ ...c, ...patch }));
       void persistSettings(patch);
@@ -635,7 +683,10 @@ export default function CortesPage() {
         parts.push(`Destaques detectados em ${r.keywords_synced} corte(s).`);
       }
       setSyncMessage(parts.join(" "));
-      if (activeClipId) {
+      if (activeClip) {
+        void loadClipWords(activeClip);
+        void loadClipKeywords(activeClipId);
+      } else if (activeClipId) {
         const kw = await getClipKeywords(jobId, activeClipId).catch(() => null);
         if (kw) setClipKeywords(kw.indices ?? []);
       }
@@ -645,6 +696,7 @@ export default function CortesPage() {
       setSyncingEdits(false);
     }
   }, [
+    activeClip,
     activeClipId,
     jobId,
     exportFormat,
@@ -653,6 +705,8 @@ export default function CortesPage() {
     compose,
     videoPos,
     persistSettings,
+    loadClipWords,
+    loadClipKeywords,
   ]);
 
   const handleClipTextChange = useCallback(
@@ -691,7 +745,7 @@ export default function CortesPage() {
       setError(null);
       try {
         const r = startNew
-          ? await waitForClips(jobId)
+          ? await waitForClips(jobId, { focuses: detectFocuses })
           : await pollForClips(jobId);
         await applyDetectResult(r);
       } catch (e: unknown) {
@@ -700,7 +754,7 @@ export default function CortesPage() {
         setError(e instanceof Error ? e.message : "Falha ao detectar cortes");
       }
     },
-    [jobId, applyDetectResult],
+    [jobId, applyDetectResult, detectFocuses],
   );
 
   useEffect(() => {
@@ -741,7 +795,7 @@ export default function CortesPage() {
   };
 
   const handlePreview = (clip: ClipSegment) => {
-    videoControlsRef.current?.seek(getClipPreviewStart(clip));
+    videoControlsRef.current?.seek(getClipPreviewStart(clip), { play: true });
   };
 
   const handleClipWordsChange = (next: Word[]) => {
@@ -776,7 +830,7 @@ export default function CortesPage() {
 
   const renderBody = (clip?: ClipSegment) => {
     const { aspect: a, template } = formatToBackend(exportFormat);
-    return {
+    const body = {
       aspect: a,
       template,
       preset: null as string | null,
@@ -810,6 +864,7 @@ export default function CortesPage() {
       ig_username_size: compose.ig_username_size,
       ig_caption_size: compose.ig_caption_size,
     };
+    return body;
   };
 
   const pollClips = useCallback(() => {
@@ -895,6 +950,10 @@ export default function CortesPage() {
       setError("Selecione ao menos um corte para continuar.");
       return;
     }
+    if (step === 2 && enabledClips.length === 0) {
+      setError("Selecione ao menos um corte para continuar.");
+      return;
+    }
     setError(null);
     if (step === 1) {
       const first = enabledClips[0];
@@ -958,7 +1017,7 @@ export default function CortesPage() {
       )}
 
       <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 overflow-hidden pb-28 lg:grid-cols-[minmax(0,1fr)_420px] xl:grid-cols-[minmax(0,1fr)_480px]">
-        <div className="order-1 flex max-h-[55dvh] min-h-[180px] min-h-0 flex-col overflow-hidden sm:max-h-[60dvh] lg:order-none lg:max-h-full lg:min-h-[240px]">
+        <div className="order-1 flex max-h-[68dvh] min-h-[180px] min-h-0 flex-col overflow-hidden sm:max-h-[72dvh] lg:order-none lg:max-h-full lg:min-h-[240px]">
           {step >= 2 && highlightEnabled && (
             <p className="mb-1 shrink-0 text-center text-[10px] text-accent">
               {clipKeywords.length > 0
@@ -966,11 +1025,14 @@ export default function CortesPage() {
                 : "Destaques ligados — aba Destaques → Detectar com IA"}
             </p>
           )}
-          {wordsData && step >= 2 && activeTemplate && isComposeFormat(exportFormat) ? (
+          <div className="flex min-h-0 w-full flex-1 flex-col items-center justify-center overflow-hidden">
+          {job && step >= 2 && activeTemplate && usesTemplatePreview(exportFormat) ? (
             <TemplatePreview
+              key={`${jobId}-tpl`}
               jobId={jobId}
               template={activeTemplate}
-              overlayAsset={compose.overlay_asset ?? null}
+              compact
+              overlayAsset={previewCompose.overlay_asset ?? null}
               words={previewWords}
               style={{ ...style, pos_x: position.x, pos_y: position.y }}
               wordsPerLine={wordsPerLine}
@@ -980,7 +1042,7 @@ export default function CortesPage() {
                 previewClip
                   ? (() => {
                       const t = sourceTimeToExportTime(previewClip, currentTime);
-                      if (t == null) return undefined;
+                      if (t == null) return 0;
                       return Math.max(0, Math.min(getClipExportDuration(previewClip), t));
                     })()
                   : undefined
@@ -992,10 +1054,15 @@ export default function CortesPage() {
               onVideoPosChange={handleVideoPosChange}
               onOverlayPosChange={handleOverlayPosChange}
               onLogoPosChange={(p) => handleComposeChange({ logo_x: p.x, logo_y: p.y })}
+              onSubtitlePositionChange={(pos) => {
+                setPosition(pos);
+                setStyle((s) => ({ ...s, pos_x: pos.x, pos_y: pos.y }));
+              }}
               registerControls={(c) => (videoControlsRef.current = c)}
             />
-          ) : wordsData ? (
+          ) : job ? (
             <VideoPreview
+              key={`${jobId}-preview-${step}`}
               jobId={jobId}
               width={previewSize.width}
               height={previewSize.height}
@@ -1009,7 +1076,7 @@ export default function CortesPage() {
               position={position}
               registerControls={(c) => (videoControlsRef.current = c)}
               compact
-              compactMaxHeight="100%"
+              compactMaxHeight="min(calc(70dvh - 4rem), 100%)"
               highlightEnabled={step >= 2 && highlightEnabled}
               highlightPhrases={highlightPhrases}
               activeClip={
@@ -1022,9 +1089,10 @@ export default function CortesPage() {
               videoObjectFit={step >= 2 && exportFormat !== "original" ? "cover" : "contain"}
             />
           ) : null}
+          </div>
           {step >= 2 && (
             <p className="mt-1 shrink-0 text-center text-xs text-muted">
-              Preview — arraste a legenda{activeTemplate ? " · formato composto" : ""}
+              Preview — arraste a legenda{exportFormat === "reels_full" ? " · 9:16 (arraste o vídeo p/ ajustar o corte)" : usesTemplatePreview(exportFormat) ? " · formato composto" : ""}
             </p>
           )}
         </div>
@@ -1036,12 +1104,16 @@ export default function CortesPage() {
                 clips={clipList}
                 activeId={activeClipId}
                 detecting={detecting}
+                transcribing={Boolean(transcribing)}
                 onDetect={handleDetect}
                 onSelect={setActiveClipId}
                 onToggle={handleToggle}
                 onRemove={handleRemove}
                 onPreview={handlePreview}
                 onReorder={handleReorder}
+                focuses={detectFocuses}
+                onFocusesChange={setDetectFocuses}
+                showFocusPicker={clipList.length === 0 && !detecting}
               />
               <ClipBoundsEditor clip={activeClip} onChange={handleClipChange} />
             </div>
@@ -1049,7 +1121,7 @@ export default function CortesPage() {
 
           {step !== 1 && (
             <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain [scrollbar-gutter:stable]">
-              {(step === 2 || step === 3) && wordsData && (
+              {(step === 2 || step === 3) && (
                 <div className="flex flex-col">
                   {step === 2 && (
                     <>
@@ -1103,6 +1175,7 @@ export default function CortesPage() {
                       </Section>
                     )}
 
+                    {wordsData ? (
                     <Section
                       step={isComposeFormat(exportFormat) ? 3 : 2}
                       title="Estilo da legenda"
@@ -1147,9 +1220,14 @@ export default function CortesPage() {
                         className="-mx-1 mb-0 rounded-lg border border-border"
                       />
                     </Section>
+                    ) : (
+                      <p className="rounded-lg border border-border bg-panel/50 px-4 py-3 text-sm text-zinc-400">
+                        Aguardando transcrição para editar legendas, destaques e texto…
+                      </p>
+                    )}
                   </div>
 
-                  {step2Tab === "style" && (
+                  {wordsData && step2Tab === "style" && (
                     <>
                       {highlightEnabled && clipKeywords.length === 0 && (
                         <p className="border-b border-amber-500/20 bg-amber-500/5 px-4 py-2 text-xs text-amber-200">
@@ -1165,6 +1243,7 @@ export default function CortesPage() {
                       videoHeight={previewSize.height}
                       videoWidth={previewSize.width}
                       position={position}
+                      defaultPosition={defaultSubtitlePos}
                       onPositionChange={(pos) => {
                         setPosition(pos);
                         setStyle((s) => ({ ...s, pos_x: pos.x, pos_y: pos.y }));
@@ -1173,7 +1252,7 @@ export default function CortesPage() {
                     </>
                   )}
 
-                  {step2Tab === "highlights" && activeClipId && (
+                  {wordsData && step2Tab === "highlights" && activeClipId && (
                     <HighlightPanel
                       jobId={jobId}
                       clipId={activeClipId}
@@ -1189,7 +1268,7 @@ export default function CortesPage() {
                     />
                   )}
 
-                  {step2Tab === "text" && (
+                  {wordsData && step2Tab === "text" && (
                     <div className="min-h-[200px]">
                       <TranscriptEditor
                         jobId={jobId}

@@ -5,14 +5,16 @@ ROOT="$(cd "$(dirname "$0")" && pwd)"
 export PATH="/opt/homebrew/opt/node@20/bin:/opt/homebrew/opt/ffmpeg-full/bin:$PATH"
 
 echo "==> Parando instâncias antigas..."
+launchctl unload "$HOME/Library/LaunchAgents/com.legendas.frontend.plist" 2>/dev/null || true
 pkill -f "uvicorn main:app" 2>/dev/null || true
 pkill -f "next dev" 2>/dev/null || true
+pkill -f "next-server" 2>/dev/null || true
 sleep 2
 
 echo "==> Backend (porta 8000)..."
 cd "$ROOT/backend"
 source .venv/bin/activate
-python -m uvicorn main:app --port 8000 --host 127.0.0.1 &
+.venv/bin/python -m uvicorn main:app --port 8000 --host 127.0.0.1 &
 BACKEND_PID=$!
 sleep 3
 

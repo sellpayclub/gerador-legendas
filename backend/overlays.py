@@ -13,6 +13,8 @@ except ImportError:
     ImageDraw = None  # type: ignore[misc, assignment]
     ImageFont = None  # type: ignore[misc, assignment]
 
+from ass_gen import _EMOJI_CHAR_RE
+
 FONTS_DIR = Path(__file__).resolve().parent / "fonts"
 
 
@@ -119,8 +121,33 @@ def headline_box_border(style: str) -> int:
     return 24 if style == "bold_red" else 8
 
 
+def headline_box_radius(style: str) -> int:
+    return 14 if style == "bold_red" else 10
+
+
 def headline_font_size(size: int | None) -> int:
     return max(20, min(80, int(size or 42)))
+
+
+def headline_display_text(text: str, style: str) -> str:
+    """Uppercase for bold_red but never mutate emoji codepoints."""
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    if style != "bold_red":
+        return normalized
+
+    def upper_part(segment: str) -> str:
+        out: list[str] = []
+        last = 0
+        for m in _EMOJI_CHAR_RE.finditer(segment):
+            if m.start() > last:
+                out.append(segment[last : m.start()].upper())
+            out.append(m.group(0))
+            last = m.end()
+        if last < len(segment):
+            out.append(segment[last:].upper())
+        return "".join(out)
+
+    return "\n".join(upper_part(p) for p in normalized.split("\n"))
 
 
 def _text_width(draw: ImageDraw.ImageDraw, text: str, font: Any) -> float:
@@ -131,13 +158,79 @@ def _text_width(draw: ImageDraw.ImageDraw, text: str, font: Any) -> float:
         return float(bbox[2] - bbox[0])
 
 
+def _headline_line_width(
+    draw: ImageDraw.ImageDraw,
+    text: str,
+    font: Any,
+    emoji_font: Any,
+    emoji_h: int,
+) -> float:
+    width = 0.0
+    last = 0
+    for m in _EMOJI_CHAR_RE.finditer(text):
+        if m.start() > last:
+            width += _text_width(draw, text[last : m.start()], font)
+        em = m.group(0)
+        glyph = _emoji_glyph(em, emoji_font, emoji_h)
+        width += float(glyph[1] if glyph else _text_width(draw, em, font))
+        last = m.end()
+    if last < len(text):
+        width += _text_width(draw, text[last:], font)
+    return width
+
+
+def _draw_headline_line(
+    draw: ImageDraw.ImageDraw,
+    img: Any,
+    x: int,
+    y: int,
+    text: str,
+    font: Any,
+    emoji_font: Any,
+    fill: tuple[int, int, int],
+    emoji_h: int,
+) -> None:
+    cursor = float(x)
+    last = 0
+    label = text if text else " "
+    for m in _EMOJI_CHAR_RE.finditer(label):
+        if m.start() > last:
+            seg = label[last : m.start()]
+            draw.text((cursor, y), seg, font=font, fill=fill, anchor="ls")
+            cursor += _text_width(draw, seg, font)
+        em = m.group(0)
+        glyph = _emoji_glyph(em, emoji_font, emoji_h)
+        if glyph:
+            patch, nw = glyph
+            paste_y = int(y - emoji_h)
+            img.paste(patch, (int(cursor), paste_y), patch)
+            cursor += nw
+        else:
+            draw.text((cursor, y), em, font=font, fill=fill, anchor="ls")
+            cursor += _text_width(draw, em, font)
+        last = m.end()
+    if last < len(label):
+        seg = label[last:]
+        draw.text((cursor, y), seg, font=font, fill=fill, anchor="ls")
+
+
+def _line_ascent_descent(font: Any, emoji_font: Any) -> tuple[int, int]:
+    a1, d1 = font.getmetrics()
+    a2, d2 = emoji_font.getmetrics()
+    return max(a1, a2), max(d1, d2)
+
+
 def layout_headline_lines(
     draw: ImageDraw.ImageDraw,
     text: str,
     font: Any,
     max_width_px: int,
+    emoji_font: Any | None = None,
+    emoji_h: int | None = None,
 ) -> list[str]:
     """Word-wrap per paragraph; preserve explicit newlines from the user."""
+    ef = emoji_font or font
+    eh = emoji_h or _emoji_target_height(font)
     normalized = text.replace("\r\n", "\n").replace("\r", "\n")
     lines: list[str] = []
     for paragraph in normalized.split("\n"):
@@ -151,7 +244,8 @@ def layout_headline_lines(
         current = ""
         for word in words:
             trial = f"{current} {word}".strip() if current else word
-            if _text_width(draw, trial, font) <= max_width_px or not current:
+            trial_w = _headline_line_width(draw, trial, font, ef, eh)
+            if trial_w <= max_width_px or not current:
                 current = trial
             else:
                 lines.append(current)
@@ -204,7 +298,7 @@ def render_headline_png(
         raise ValueError("headline vazia")
 
     style = extras.headline_style or "bold_red"
-    display = raw_text.upper() if style == "bold_red" else raw_text
+    display = headline_display_text(raw_text, style)
     fs = headline_font_size(extras.headline_font_size)
     border = headline_box_border(style)
     bg_hex = extras.headline_bg if style == "bold_red" else (extras.headline_bg or "#000000")
@@ -213,19 +307,17 @@ def render_headline_png(
     max_w = int(canvas_width * max(0.5, min(1.0, extras.headline_max_width_pct)))
 
     font = _load_font(fs, bold=(style == "bold_red"))
+    emoji_font = _load_emoji_font(fs)
+    emoji_h = _emoji_target_height(font)
     measure = Image.new("RGBA", (max_w + border * 4, 5000), (0, 0, 0, 0))
     mdraw = ImageDraw.Draw(measure)
-    lines = layout_headline_lines(mdraw, display, font, max_w)
+    lines = layout_headline_lines(mdraw, display, font, max_w, emoji_font, emoji_h)
 
-    line_metrics: list[tuple[int, int]] = []
+    ascent, descent = _line_ascent_descent(font, emoji_font)
+    line_h = ascent + descent
     spacing = max(2, fs // 12)
-    for line in lines:
-        label = line if line else " "
-        bbox = mdraw.textbbox((0, 0), label, font=font)
-        line_metrics.append((bbox[2] - bbox[0], bbox[3] - bbox[1]))
-
+    content_h = line_h * len(lines) + spacing * max(0, len(lines) - 1)
     content_w = max_w
-    content_h = sum(h for _, h in line_metrics) + spacing * max(0, len(lines) - 1)
     total_w = content_w + border * 2
     total_h = content_h + border * 2
 
@@ -233,19 +325,21 @@ def render_headline_png(
     fg = _hex_to_rgb(fg_hex)
     img = Image.new("RGBA", (max(1, total_w), max(1, total_h)), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
-    draw.rectangle((0, 0, total_w, total_h), fill=(*bg, int(0.92 * 255)))
+    radius = headline_box_radius(style)
+    draw.rounded_rectangle((0, 0, total_w, total_h), radius=radius, fill=(*bg, 255))
 
-    y = border
-    for i, line in enumerate(lines):
-        lw, lh = line_metrics[i]
+    y_cursor = border
+    for line in lines:
+        lw = int(_headline_line_width(draw, line if line else " ", font, emoji_font, emoji_h))
         if align == "left":
             x = border
         elif align == "right":
             x = total_w - border - lw
         else:
             x = border + max(0, (content_w - lw) // 2)
-        draw.text((x, y), line if line else " ", font=font, fill=fg)
-        y += lh + spacing
+        baseline = y_cursor + ascent
+        _draw_headline_line(draw, img, x, baseline, line, font, emoji_font, fg, emoji_h)
+        y_cursor += line_h + spacing
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     img.save(out_path, "PNG")
@@ -304,6 +398,38 @@ def _load_font(size: int, bold: bool = False) -> Any:
         if p.exists():
             return ImageFont.truetype(str(p), size)
     return ImageFont.load_default()
+
+
+EMOJI_FONT_PX = 109
+
+
+def _load_emoji_font(_size: int) -> Any:
+    if ImageFont is None:
+        raise RuntimeError("Pillow não instalado — pip install pillow")
+    p = FONTS_DIR / "NotoColorEmoji.ttf"
+    if p.exists():
+        return ImageFont.truetype(str(p), EMOJI_FONT_PX)
+    return _load_font(_size, bold=False)
+
+
+def _emoji_target_height(text_font: Any) -> int:
+    ascent, _ = text_font.getmetrics()
+    return max(1, ascent)
+
+
+def _emoji_glyph(emoji: str, emoji_font: Any, target_h: int) -> tuple[Any, int] | None:
+    if Image is None:
+        return None
+    scratch = Image.new("RGBA", (256, 256), (0, 0, 0, 0))
+    sd = ImageDraw.Draw(scratch)
+    sd.text((8, 8), emoji, font=emoji_font, fill=(255, 255, 255, 255), anchor="lt")
+    bbox = scratch.getbbox()
+    if not bbox:
+        return None
+    crop = scratch.crop(bbox)
+    nh = max(1, target_h)
+    nw = max(1, round(crop.width * (nh / max(1, crop.height))))
+    return crop.resize((nw, nh), Image.Resampling.LANCZOS), nw
 
 
 def render_instagram_header_png(

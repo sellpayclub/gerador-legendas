@@ -3,6 +3,8 @@
 import { Download, Loader2, Pencil } from "lucide-react";
 import type { ClipSegment, ExportFormatId } from "@/lib/api";
 import { clipOutputUrl } from "@/lib/api";
+import { isMultiTenant } from "@/lib/hosted";
+import { useAccessToken } from "@/lib/useAccessToken";
 import { FORMAT_OPTIONS } from "@/components/ClipFormatPicker";
 
 type Props = {
@@ -32,6 +34,9 @@ export default function ClipExportPanel({
   renderingIds,
   onEditFormat,
 }: Props) {
+  const accessToken = useAccessToken();
+  const hosted = isMultiTenant();
+  const canDownload = !hosted || Boolean(accessToken);
   const enabled = clips.filter((c) => c.enabled);
   const formatLabel = FORMAT_OPTIONS.find((f) => f.id === format)?.label ?? format;
 
@@ -115,9 +120,9 @@ export default function ClipExportPanel({
                     Gerar MP4
                   </button>
                 )}
-                {ready && (
+                {ready && canDownload && (
                   <a
-                    href={clipOutputUrl(jobId, clip.id)}
+                    href={clipOutputUrl(jobId, clip.id, accessToken)}
                     download
                     className="touch-target flex items-center gap-2 rounded-lg bg-green-500/20 px-4 py-2.5 text-sm font-semibold text-green-300"
                   >

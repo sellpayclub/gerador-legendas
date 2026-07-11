@@ -12,11 +12,13 @@ import {
   type JobState,
 } from "@/lib/api";
 import { useJobEvents } from "@/lib/useJobEvents";
+import { useAccessToken } from "@/lib/useAccessToken";
 
 export default function CortesExportPage() {
   const params = useParams<{ jobId: string }>();
   const router = useRouter();
   const jobId = params.jobId;
+  const accessToken = useAccessToken();
 
   const [initial, setInitial] = useState<JobState | null>(null);
   const [clips, setClips] = useState<ClipSegment[]>([]);
@@ -76,12 +78,12 @@ export default function CortesExportPage() {
               >
                 <div className="mb-2 font-medium text-zinc-100">{clip.title}</div>
                 <video
-                  src={clipOutputUrl(jobId, clip.id)}
+                  src={clipOutputUrl(jobId, clip.id, accessToken)}
                   controls
                   className="mb-3 w-full rounded-lg bg-black"
                 />
                 <a
-                  href={clipOutputUrl(jobId, clip.id)}
+                  href={clipOutputUrl(jobId, clip.id, accessToken)}
                   download={`corte_${clip.title.replace(/[^\w\s-]/g, "").slice(0, 40)}.mp4`}
                   className="inline-flex items-center gap-2 rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-bg"
                 >

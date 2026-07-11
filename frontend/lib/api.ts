@@ -23,6 +23,8 @@ export type JobState = {
   mode?: "legendas" | "cortes";
   clips_ready?: boolean;
   clip_count?: number;
+  created_at?: number;
+  updated_at?: number;
 };
 
 export type ClipSegmentPart = {
@@ -100,12 +102,15 @@ export type CortesFormatPresets = Partial<Record<ExportFormatId, {
   videoPos: { x: number; y: number };
 }>>;
 
+export type ClipFocusType = "viral" | "polemico" | "engracado" | "valioso" | "inspirador" | "choque";
+
 export type ClipsData = {
   clips: ClipSegment[];
   manual?: boolean;
   model?: string;
   detecting?: boolean;
   detect_error?: string | null;
+  detect_focuses?: ClipFocusType[];
   style?: StyleConfig;
   preset?: string;
   words_per_line?: number;
@@ -225,7 +230,7 @@ export type StyleConfig = {
   shadow: number;
   bold: boolean;
   italic: boolean;
-  animation: "pop" | "fade" | "none";
+  animation: "pop" | "fade" | "bounce" | "slide" | "none";
   pop_scale: number;
   pop_duration_ms: number;
   box: boolean;
@@ -324,9 +329,43 @@ export type KeywordsResult = {
   model: string;
 };
 
+async function authHeaders(): Promise<Record<string, string>> {
+  if (typeof window === "undefined") return {};
+  try {
+    const { getAccessToken } = await import("@/lib/supabase/client");
+    const token = await getAccessToken();
+    return token ? { Authorization: `Bearer ${token}` } : {};
+  } catch {
+    return {};
+  }
+}
+
+async function apiFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  const auth = await authHeaders();
+  const headers = new Headers(init?.headers);
+  for (const [k, v] of Object.entries(auth)) {
+    headers.set(k, v);
+  }
+  const res = await fetch(input, { ...init, headers });
+  if (typeof window !== "undefined") {
+    if (res.status === 402) {
+      window.location.href = "/plano-inativo";
+    } else if (res.status === 403) {
+      const { isMultiTenant } = await import("@/lib/hosted");
+      if (isMultiTenant()) window.location.href = "/configuracoes";
+    }
+  }
+  return res;
+}
+
 async function jsonOrThrow<T>(res: Response): Promise<T> {
   if (!res.ok) {
     const text = await res.text().catch(() => res.statusText);
+    if (res.status === 413) {
+      throw new Error(
+        "413: Arquivo grande demais para o servidor. Se persistir após atualizar a VPS, avise o suporte.",
+      );
+    }
     if (res.status === 502) {
       throw new Error(
         "502: O servidor cortou a conexão (upload grande ou timeout). Tente de novo — se persistir, atualize a VPS.",
@@ -341,34 +380,96 @@ export async function uploadVideo(
   file: File,
   language: string = "auto",
   mode: "legendas" | "cortes" = "legendas",
+  onProgress?: (pct: number) => void,
 ): Promise<JobState> {
-  const form = new FormData();
-  form.append("file", file);
-  form.append("language", language);
-  form.append("mode", mode);
-  const res = await fetch("/api/jobs", { method: "POST", body: form });
-  return jsonOrThrow<JobState>(res);
+  const { getAccessToken } = await import("@/lib/supabase/client");
+  const { isMultiTenant } = await import("@/lib/hosted");
+  const hosted = isMultiTenant();
+  const token = hosted ? await getAccessToken(true) : null;
+  if (hosted && !token) {
+    throw new Error("401: Sessão expirada. Faça login novamente e tente outra vez.");
+  }
+
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    const form = new FormData();
+    form.append("file", file);
+    form.append("language", language);
+    form.append("mode", mode);
+
+    xhr.upload.addEventListener("progress", (ev) => {
+      if (ev.lengthComputable && onProgress) {
+        onProgress(Math.min(99, Math.round((ev.loaded / ev.total) * 100)));
+      }
+    });
+
+    xhr.addEventListener("load", () => {
+      if (xhr.status === 402) {
+        window.location.href = "/plano-inativo";
+        reject(new Error("402: Plano inativo."));
+        return;
+      }
+      if (xhr.status === 403) {
+        window.location.href = "/configuracoes";
+        reject(new Error("403: Configure sua chave OpenAI."));
+        return;
+      }
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          resolve(JSON.parse(xhr.responseText) as JobState);
+        } catch {
+          reject(new Error("Resposta inválida do servidor após upload."));
+        }
+        return;
+      }
+      const text = xhr.responseText?.slice(0, 200) || xhr.statusText;
+      if (xhr.status === 413) {
+        reject(new Error("413: Arquivo grande demais para o servidor."));
+        return;
+      }
+      if (xhr.status === 502) {
+        reject(new Error("502: O servidor cortou a conexão (upload grande ou timeout)."));
+        return;
+      }
+      reject(new Error(`${xhr.status}: ${text}`));
+    });
+
+    xhr.addEventListener("error", () => {
+      reject(new Error("Erro de rede durante o upload. Verifique sua conexão."));
+    });
+    xhr.addEventListener("abort", () => {
+      reject(new Error("Upload cancelado."));
+    });
+
+    xhr.open("POST", "/api/jobs");
+    if (token) xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+    xhr.send(form);
+  });
 }
 
 export async function getJob(jobId: string): Promise<JobState> {
-  return jsonOrThrow<JobState>(await fetch(`/api/jobs/${jobId}`));
+  return jsonOrThrow<JobState>(await apiFetch(`/api/jobs/${jobId}`));
+}
+
+export async function listJobs(): Promise<{ jobs: JobState[] }> {
+  return jsonOrThrow(await apiFetch("/api/jobs"));
 }
 
 export async function deleteJob(jobId: string): Promise<{ ok: boolean }> {
-  return jsonOrThrow(await fetch(`/api/jobs/${jobId}`, { method: "DELETE" }));
+  return jsonOrThrow(await apiFetch(`/api/jobs/${jobId}`, { method: "DELETE" }));
 }
 
 export async function startTranscribe(jobId: string): Promise<{ ok: boolean }> {
-  return jsonOrThrow(await fetch(`/api/jobs/${jobId}/transcribe`, { method: "POST" }));
+  return jsonOrThrow(await apiFetch(`/api/jobs/${jobId}/transcribe`, { method: "POST" }));
 }
 
 export async function getWords(jobId: string): Promise<WordsData> {
-  return jsonOrThrow(await fetch(`/api/jobs/${jobId}/words`));
+  return jsonOrThrow(await apiFetch(`/api/jobs/${jobId}/words`));
 }
 
 export async function saveWords(jobId: string, words: Word[]): Promise<{ ok: boolean }> {
   return jsonOrThrow(
-    await fetch(`/api/jobs/${jobId}/words`, {
+    await apiFetch(`/api/jobs/${jobId}/words`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ words }),
@@ -378,7 +479,7 @@ export async function saveWords(jobId: string, words: Word[]): Promise<{ ok: boo
 
 export async function startRender(jobId: string, body: RenderRequest): Promise<{ ok: boolean }> {
   return jsonOrThrow(
-    await fetch(`/api/jobs/${jobId}/render`, {
+    await apiFetch(`/api/jobs/${jobId}/render`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -386,56 +487,71 @@ export async function startRender(jobId: string, body: RenderRequest): Promise<{
   );
 }
 
-export function videoUrl(jobId: string): string {
-  return `/api/jobs/${jobId}/video`;
-}
-
-export function outputUrl(jobId: string): string {
-  return `/api/jobs/${jobId}/output.mp4`;
-}
-
-export function eventsUrl(jobId: string): string {
-  if (typeof window !== "undefined") {
-    return `/api/jobs/${jobId}/events`;
+export function videoUrl(jobId: string, accessToken?: string | null): string {
+  const base = `/api/jobs/${jobId}/video`;
+  if (accessToken) {
+    return `${base}?access_token=${encodeURIComponent(accessToken)}`;
   }
-  const base = process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8000";
-  return `${base}/api/jobs/${jobId}/events`;
+  return base;
+}
+
+export function outputUrl(jobId: string, accessToken?: string | null): string {
+  const base = `/api/jobs/${jobId}/output.mp4`;
+  if (accessToken) {
+    return `${base}?access_token=${encodeURIComponent(accessToken)}`;
+  }
+  return base;
+}
+
+export function eventsUrl(jobId: string, accessToken?: string | null): string {
+  const base =
+    typeof window !== "undefined"
+      ? `/api/jobs/${jobId}/events`
+      : `${process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8000"}/api/jobs/${jobId}/events`;
+  if (accessToken) {
+    return `${base}?access_token=${encodeURIComponent(accessToken)}`;
+  }
+  return base;
 }
 
 export async function listPresets(): Promise<{ presets: { id: string; name: string; values: any }[] }> {
-  return jsonOrThrow(await fetch(`/api/presets`));
+  return jsonOrThrow(await apiFetch(`/api/presets`));
 }
 
 export async function listTemplates(): Promise<{ templates: TemplateInfo[]; resolutions: ResolutionInfo[] }> {
-  return jsonOrThrow(await fetch(`/api/templates`));
+  return jsonOrThrow(await apiFetch(`/api/templates`));
 }
 
 export async function listAssets(jobId: string): Promise<{ assets: AssetInfo[] }> {
-  return jsonOrThrow(await fetch(`/api/jobs/${jobId}/assets`));
+  return jsonOrThrow(await apiFetch(`/api/jobs/${jobId}/assets`));
 }
 
 export async function uploadAsset(jobId: string, file: File): Promise<{ filename: string; kind: string; size: number }> {
   const form = new FormData();
   form.append("file", file);
-  const res = await fetch(`/api/jobs/${jobId}/assets`, { method: "POST", body: form });
+  const res = await apiFetch(`/api/jobs/${jobId}/assets`, { method: "POST", body: form });
   return jsonOrThrow(res);
 }
 
 export async function deleteAsset(jobId: string, filename: string): Promise<{ ok: boolean }> {
-  return jsonOrThrow(await fetch(`/api/jobs/${jobId}/assets/${encodeURIComponent(filename)}`, { method: "DELETE" }));
+  return jsonOrThrow(await apiFetch(`/api/jobs/${jobId}/assets/${encodeURIComponent(filename)}`, { method: "DELETE" }));
 }
 
-export function assetUrl(jobId: string, filename: string): string {
-  return `/api/jobs/${jobId}/assets/${encodeURIComponent(filename)}`;
+export function assetUrl(jobId: string, filename: string, accessToken?: string | null): string {
+  const base = `/api/jobs/${jobId}/assets/${encodeURIComponent(filename)}`;
+  if (accessToken) {
+    return `${base}?access_token=${encodeURIComponent(accessToken)}`;
+  }
+  return base;
 }
 
 export async function getKeywords(jobId: string): Promise<KeywordsResult> {
-  return jsonOrThrow(await fetch(`/api/jobs/${jobId}/keywords`));
+  return jsonOrThrow(await apiFetch(`/api/jobs/${jobId}/keywords`));
 }
 
 export async function detectKeywords(jobId: string): Promise<KeywordsResult> {
   return jsonOrThrow(
-    await fetch(`/api/jobs/${jobId}/keywords/detect`, { method: "POST" }),
+    await apiFetch(`/api/jobs/${jobId}/keywords/detect`, { method: "POST" }),
   );
 }
 
@@ -445,7 +561,7 @@ export async function saveKeywords(
   effects?: Record<string, PhraseEffect> | null,
 ): Promise<{ indices: number[]; effects?: Record<string, PhraseEffect>; manual: boolean }> {
   return jsonOrThrow(
-    await fetch(`/api/jobs/${jobId}/keywords`, {
+    await apiFetch(`/api/jobs/${jobId}/keywords`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ indices, effects: effects ?? undefined }),
@@ -466,7 +582,7 @@ export async function enrichWords(
   opts: { punctuation?: boolean; emojis?: boolean },
 ): Promise<EnrichResult> {
   return jsonOrThrow(
-    await fetch(`/api/jobs/${jobId}/enrich`, {
+    await apiFetch(`/api/jobs/${jobId}/enrich`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -477,9 +593,16 @@ export async function enrichWords(
   );
 }
 
-export async function detectClips(jobId: string): Promise<{ ok: boolean; detecting: boolean }> {
+export async function detectClips(
+  jobId: string,
+  focuses: ClipFocusType[] = [],
+): Promise<{ ok: boolean; detecting: boolean }> {
   return jsonOrThrow(
-    await fetch(`/api/jobs/${jobId}/clips/detect`, { method: "POST" }),
+    await apiFetch(`/api/jobs/${jobId}/clips/detect`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ focuses }),
+    }),
   );
 }
 
@@ -510,19 +633,19 @@ export async function pollForClips(
 /** Start detection and poll until clips are ready (avoids proxy timeout). */
 export async function waitForClips(
   jobId: string,
-  opts?: { onProgress?: (msg: string) => void; timeoutMs?: number },
+  opts?: { onProgress?: (msg: string) => void; timeoutMs?: number; focuses?: ClipFocusType[] },
 ): Promise<ClipsData> {
-  await detectClips(jobId);
+  await detectClips(jobId, opts?.focuses ?? []);
   return pollForClips(jobId, opts);
 }
 
 export async function getClips(jobId: string): Promise<ClipsData> {
-  return jsonOrThrow(await fetch(`/api/jobs/${jobId}/clips`));
+  return jsonOrThrow(await apiFetch(`/api/jobs/${jobId}/clips`));
 }
 
 export async function saveClips(jobId: string, clips: ClipSegment[]): Promise<ClipsData> {
   return jsonOrThrow(
-    await fetch(`/api/jobs/${jobId}/clips`, {
+    await apiFetch(`/api/jobs/${jobId}/clips`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ clips }),
@@ -535,7 +658,7 @@ export async function startClipsRender(
   body: ClipsRenderRequest,
 ): Promise<{ ok: boolean }> {
   return jsonOrThrow(
-    await fetch(`/api/jobs/${jobId}/clips/render`, {
+    await apiFetch(`/api/jobs/${jobId}/clips/render`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -543,8 +666,12 @@ export async function startClipsRender(
   );
 }
 
-export function clipOutputUrl(jobId: string, clipId: string): string {
-  return `/api/jobs/${jobId}/clips/${encodeURIComponent(clipId)}/output`;
+export function clipOutputUrl(jobId: string, clipId: string, accessToken?: string | null): string {
+  const base = `/api/jobs/${jobId}/clips/${encodeURIComponent(clipId)}/output`;
+  if (accessToken) {
+    return `${base}?access_token=${encodeURIComponent(accessToken)}`;
+  }
+  return base;
 }
 
 export function sliceWordsForClip(words: Word[], startS: number, endS: number): Word[] {
@@ -562,7 +689,7 @@ export async function saveClipsSettings(
   settings: ClipsSettings,
 ): Promise<ClipsData> {
   return jsonOrThrow(
-    await fetch(`/api/jobs/${jobId}/clips/settings`, {
+    await apiFetch(`/api/jobs/${jobId}/clips/settings`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(settings),
@@ -575,7 +702,7 @@ export async function syncClipsEditing(
   sourceClipId: string,
 ): Promise<{ ok: boolean; synced: number; keywords_synced: number; highlight_enabled: boolean }> {
   return jsonOrThrow(
-    await fetch(`/api/jobs/${jobId}/clips/sync-editing`, {
+    await apiFetch(`/api/jobs/${jobId}/clips/sync-editing`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ source_clip_id: sourceClipId }),
@@ -587,7 +714,7 @@ export async function getClipWords(
   jobId: string,
   clipId: string,
 ): Promise<{ words: Word[]; source: string }> {
-  return jsonOrThrow(await fetch(`/api/jobs/${jobId}/clips/${encodeURIComponent(clipId)}/words`));
+  return jsonOrThrow(await apiFetch(`/api/jobs/${jobId}/clips/${encodeURIComponent(clipId)}/words`));
 }
 
 export async function saveClipWords(
@@ -596,7 +723,7 @@ export async function saveClipWords(
   words: Word[],
 ): Promise<{ words: Word[]; ok: boolean }> {
   return jsonOrThrow(
-    await fetch(`/api/jobs/${jobId}/clips/${encodeURIComponent(clipId)}/words`, {
+    await apiFetch(`/api/jobs/${jobId}/clips/${encodeURIComponent(clipId)}/words`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ words }),
@@ -610,7 +737,7 @@ export async function renderSingleClip(
   body: Omit<ClipsRenderRequest, "clip_ids">,
 ): Promise<{ ok: boolean; clip_id: string }> {
   return jsonOrThrow(
-    await fetch(`/api/jobs/${jobId}/clips/${encodeURIComponent(clipId)}/render`, {
+    await apiFetch(`/api/jobs/${jobId}/clips/${encodeURIComponent(clipId)}/render`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -623,7 +750,7 @@ export async function getClipKeywords(
   clipId: string,
 ): Promise<KeywordsResult> {
   return jsonOrThrow(
-    await fetch(`/api/jobs/${jobId}/clips/${encodeURIComponent(clipId)}/keywords`),
+    await apiFetch(`/api/jobs/${jobId}/clips/${encodeURIComponent(clipId)}/keywords`),
   );
 }
 
@@ -632,7 +759,7 @@ export async function detectClipKeywords(
   clipId: string,
 ): Promise<KeywordsResult> {
   return jsonOrThrow(
-    await fetch(`/api/jobs/${jobId}/clips/${encodeURIComponent(clipId)}/keywords/detect`, {
+    await apiFetch(`/api/jobs/${jobId}/clips/${encodeURIComponent(clipId)}/keywords/detect`, {
       method: "POST",
     }),
   );
@@ -644,7 +771,7 @@ export async function saveClipKeywords(
   indices: number[],
 ): Promise<KeywordsResult> {
   return jsonOrThrow(
-    await fetch(`/api/jobs/${jobId}/clips/${encodeURIComponent(clipId)}/keywords`, {
+    await apiFetch(`/api/jobs/${jobId}/clips/${encodeURIComponent(clipId)}/keywords`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ indices }),
@@ -654,14 +781,24 @@ export async function saveClipKeywords(
 
 export type HealthStatus = {
   ok: boolean;
-  openai_configured: boolean;
+  multi_tenant?: boolean;
+  openai_configured: boolean | null;
   transcribe_engine: string;
   transcribe_ready: boolean;
   ffmpeg_ok: boolean;
+  job_max_age_hours?: number | null;
+};
+
+export type MeProfile = {
+  user_id: string;
+  email: string;
+  access_active: boolean;
+  openai_configured: boolean;
+  multi_tenant: boolean;
+  job_max_age_hours: number;
 };
 
 export type AppSettingsPublic = {
-  llm_provider: string;
   openai_api_key_masked: string;
   openai_api_key_set: boolean;
   openai_base_url: string;
@@ -670,8 +807,6 @@ export type AppSettingsPublic = {
   clips_model: string;
   keywords_model: string;
   enrich_model: string;
-  allowed_origins: string[];
-  public_domain: string;
   configured: boolean;
   transcribe_ready: boolean;
   warnings: string[];
@@ -681,7 +816,6 @@ export type AppSettingsPublic = {
 };
 
 export type SettingsUpdatePayload = {
-  llm_provider?: string;
   openai_api_key?: string;
   openai_base_url?: string;
   transcribe_engine?: string;
@@ -694,16 +828,40 @@ export type SettingsUpdatePayload = {
 };
 
 export async function getHealth(): Promise<HealthStatus> {
-  return jsonOrThrow(await fetch("/api/health"));
+  return jsonOrThrow(await apiFetch("/api/health"));
+}
+
+export async function getMe(): Promise<MeProfile> {
+  return jsonOrThrow(await apiFetch("/api/me"));
+}
+
+export async function updateMeSettings(openai_api_key: string): Promise<{ ok: boolean }> {
+  return jsonOrThrow(
+    await apiFetch("/api/me/settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ openai_api_key }),
+    }),
+  );
+}
+
+export async function testMeOpenAI(apiKey?: string): Promise<{ ok: boolean; message: string }> {
+  return jsonOrThrow(
+    await apiFetch("/api/me/settings/test", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(apiKey ? { openai_api_key: apiKey } : {}),
+    }),
+  );
 }
 
 export async function getSettings(): Promise<AppSettingsPublic> {
-  return jsonOrThrow(await fetch("/api/settings"));
+  return jsonOrThrow(await apiFetch("/api/settings"));
 }
 
 export async function updateSettings(payload: SettingsUpdatePayload): Promise<AppSettingsPublic> {
   return jsonOrThrow(
-    await fetch("/api/settings", {
+    await apiFetch("/api/settings", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
@@ -713,10 +871,32 @@ export async function updateSettings(payload: SettingsUpdatePayload): Promise<Ap
 
 export async function testOpenAI(apiKey?: string): Promise<{ ok: boolean; message: string }> {
   return jsonOrThrow(
-    await fetch("/api/settings/test", {
+    await apiFetch("/api/settings/test", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(apiKey ? { openai_api_key: apiKey } : {}),
+    }),
+  );
+}
+
+export type AdminSendAccessResult = {
+  ok: boolean;
+  email: string;
+  user_id?: string;
+  email_sent?: boolean;
+  email_id?: string;
+  access_link_generated?: boolean;
+};
+
+export async function adminSendAccess(
+  email: string,
+  name = "",
+): Promise<AdminSendAccessResult> {
+  return jsonOrThrow(
+    await apiFetch("/api/admin/send-access", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, name }),
     }),
   );
 }

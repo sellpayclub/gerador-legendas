@@ -1,140 +1,116 @@
-# Manutenção VPS — Gerador de Legendas
+# Manutenção VPS — ClipSaaS
 
-Referência para deploy e ajustes futuros (humano ou agente Cursor).
+Referência para deploy e ajustes na produção hosted.
 
-## Produção atual
+## Produção
 
 | Item | Valor |
 |------|-------|
-| **URL** | https://legendas.clonefyia.com |
+| **URL** | https://app.clipsaas.site |
 | **VPS IP** | `161.97.79.7` |
 | **SSH** | `root@161.97.79.7` |
 | **Código na VPS** | `/opt/legendas-locais` |
 | **GitHub** | https://github.com/sellpayclub/gerador-legendas |
-| **Dados (jobs/vídeos)** | `/opt/legendas-locais/data/jobs/` |
+| **Dados (jobs/vídeos)** | `/opt/legendas-locais/data/jobs/` (TTL 24h) |
 
 ## Arquitetura
 
 ```
-Internet → Traefik (Docker :443) → legendas_legendas-proxy (nginx)
-                                        ├─ /     → Next.js :3000 (systemd legendas-frontend)
-                                        └─ /api  → FastAPI :8000 (systemd legendas-backend)
+Internet → Traefik Docker (:443, Let's Encrypt)
+              └─ legendas_legendas-proxy (nginx:alpine)
+                    ├─ /api/*       → FastAPI :8000 (systemd legendas-backend)
+                    ├─ /webhooks/*  → FastAPI :8000
+                    └─ /*           → Next.js :3000 (systemd legendas-frontend)
 ```
 
-- **SSL:** Traefik + Let's Encrypt (não usar nginx do sistema — portas 80/443 já são do Traefik)
-- **Stack Docker:** `legendas_legendas-proxy` via `deploy/legendas-stack.yaml`
+- **SSL:** Traefik (`traefik_traefik` stack) — certificado automático para `app.clipsaas.site`
+- **Proxy nginx:** `deploy/legendas-nginx.conf` (bind-mount no container Swarm)
+- **Stack Swarm:** `deploy/legendas-stack.yaml` (gerado de `legendas-stack.template.yaml`)
+- **Caddy:** desativado na VPS (porta 443 usada pelo Traefik)
+
+### Limite de upload
+
+- **Máximo:** sem limite fixo no nginx (`client_max_body_size 0` = só limitado pelo disco)
+- **Timeout:** 7200s (2h) no nginx para uploads lentos
+- **Streaming:** Traefik **sem** middleware de buffering (pass-through); nginx usa `proxy_request_buffering off` em `/api/`
+- **`responseForwarding.flushInterval=100ms`** no service Traefik — envia dados ao nginx em streaming (mantido)
+- **Não usar** `serversTransport` via labels Docker — quebra roteamento (404). Timeouts Traefik→nginx ficam no nginx (7200s em `/api/`)
+- **Disco:** manter ≥ 30 GB livres em `/` para uploads simultâneos (jobs apagados em 24h)
 
 ## Credenciais
 
-- **`backend/.env`** na VPS — `OPENAI_API_KEY`, `ALLOWED_ORIGINS` (nunca no git)
-- **SSH:** configurar chave pública em `/root/.ssh/authorized_keys` (recomendado)
-- Copie `deploy/vps.env.example` → `deploy/vps.local.env` localmente para referência do agente (gitignored)
+- **`backend/.env`** — Supabase, Resend, Cakto, `MULTI_TENANT=true` (nunca no git)
+- **`frontend/.env.local`** — Supabase anon key, `NEXT_PUBLIC_MULTI_TENANT=true`
+- Copie `deploy/vps.env.example` → `deploy/vps.local.env` localmente (gitignored)
 
-## Comandos úteis na VPS
+## Comandos úteis
 
 ```bash
-# Status
 systemctl status legendas-backend legendas-frontend
 docker service ls | grep legendas
 curl -s http://127.0.0.1:8000/api/health
-curl -sk -o /dev/null -w "%{http_code}\n" https://legendas.clonefyia.com/api/health
+curl -sk -o /dev/null -w "%{http_code}\n" https://app.clipsaas.site/api/health
 
-# Logs
 journalctl -u legendas-backend -f
 journalctl -u legendas-frontend -f
 docker service logs legendas_legendas-proxy -f
 
-# Reiniciar só os apps (sem rebuild)
 systemctl restart legendas-backend legendas-frontend
 ```
 
-## Atualizar código (fluxo padrão)
-
-**1. Push no GitHub** (Mac ou CI):
+## Redeploy proxy (após mudar nginx ou Traefik labels)
 
 ```bash
-git add -A && git commit -m "..." && git push origin main
+cd /opt/legendas-locais/deploy
+export DOMAIN=app.clipsaas.site
+envsubst '${DOMAIN}' < legendas-stack.template.yaml > legendas-stack.yaml
+docker stack deploy -c legendas-stack.yaml legendas
+docker service update --force legendas_legendas-proxy
 ```
 
-**2. Na VPS — pull + rebuild:**
+### Traefik — timeout HTTPS para uploads longos
+
+O entrypoint `websecure` (:443) precisa de timeout longo (7200s) para uploads grandes:
 
 ```bash
-ssh root@161.97.79.7
-cd /opt/legendas-locais
-git pull origin main
-bash deploy/setup.sh --update
+bash /opt/legendas-locais/deploy/update-traefik-upload-timeouts.sh
 ```
 
-Ou em uma linha:
+Isso edita `/root/traefik.yaml` e roda `docker stack deploy` (método seguro).
+**Nunca** use `docker service update --args` no Traefik — sobrescreve todos os argumentos e derruba o site.
+
+## Atualizar código
 
 ```bash
 ssh root@161.97.79.7 'cd /opt/legendas-locais && git pull origin main && bash deploy/setup.sh --update'
 ```
 
-> `setup.sh --update` preserva `backend/.env` existente, rebuilda frontend, reinicia systemd e atualiza stack Traefik.
-
-## Primeira vez: ligar VPS ao GitHub
-
-Se `/opt/legendas-locais` ainda não for um clone git:
-
-```bash
-ssh root@161.97.79.7
-cp /opt/legendas-locais/backend/.env /tmp/legendas.env.bak
-rm -rf /opt/legendas-locais
-git clone git@github.com:sellpayclub/gerador-legendas.git /opt/legendas-locais
-cp /tmp/legendas.env.bak /opt/legendas-locais/backend/.env
-bash /opt/legendas-locais/deploy/setup.sh --update
-```
-
-Para clone via HTTPS (sem chave deploy key na VPS):
-
-```bash
-git clone https://github.com/sellpayclub/gerador-legendas.git /opt/legendas-locais
-```
-
-## Instruções para agente Cursor
-
-Ao pedir ajustes na VPS:
-
-1. Ler este arquivo e `deploy/vps.local.env` (se existir no workspace do usuário)
-2. SSH: `root@161.97.79.7`
-3. Editar em `/opt/legendas-locais` **ou** editar local + push + `git pull` na VPS
-4. Sempre rodar `bash deploy/setup.sh --update` após mudanças de código
-5. Verificar: `curl -sk https://legendas.clonefyia.com/api/health`
-6. **Nunca** commitar senhas, `.env` ou `data/jobs/`
-
 ## DNS
 
 ```bash
-dig +short legendas.clonefyia.com
-# → 161.97.79.7 (via CNAME server.clonefyia.com ou A direto)
+dig +short app.clipsaas.site
+# → 161.97.79.7
 ```
 
-## Troubleshooting rápido
+## Troubleshooting
 
 | Problema | Ação |
 |----------|------|
 | Site 502 | `systemctl restart legendas-backend legendas-frontend` |
-| SSL falhou | Conferir DNS; Traefik emite cert ao primeiro acesso HTTPS |
-| Upload grande falha / **502 no upload** | Ver abaixo — Traefik timeout + proxy nginx |
-| Jobs sumiram após restart | Backend rehydrata de `data/jobs/` no startup — conferir se pasta existe |
-| Render falha | `ffmpeg -filters \| grep ass` na VPS — precisa libass |
+| **413 Request Entity Too Large** | Verificar middleware de buffering no Traefik (não usar). Redeploy proxy com `legendas-nginx.conf` (`client_max_body_size 0`). Teste: POST 2+ GB sem auth deve dar **401**, não 413. |
+| **502 em upload grande** | Traefik `websecure` precisa `readTimeout`/`idleTimeout` 7200s (`/root/traefik.yaml` ou `update-traefik-upload-timeouts.sh`) |
+| SSL falhou | Conferir DNS A record → 161.97.79.7 |
+| Login Supabase falha | Redirect URL `https://app.clipsaas.site/auth/callback` no painel Supabase |
+| Webhook Cakto 403 | Webhook agora é **Supabase Edge Function** — secret deve estar em Supabase Dashboard → Edge Functions → Secrets (`CAKTO_WEBHOOK_SECRET`), igual ao painel Cakto. URL: `https://lcbczyzedluaoxtuajoz.supabase.co/functions/v1/cakto-webhook` |
+| Webhook VPS 410 | Endpoint antigo `/webhooks/cakto` desativado de propósito — use só a URL Supabase |
+| E-mail não chega | Conferir secrets `RESEND_API_KEY` e `RESEND_FROM_EMAIL` na Edge Function; ver tabela `webhook_events` no Supabase |
+| Upload grande timeout | nginx/Traefik timeout 7200s (2h); conexão lenta em arquivos multi-GB pode levar >1h |
 
-### 502 no upload (vídeo grande)
+## Instruções para agente Cursor
 
-1. Atualize o código e rode `bash deploy/setup.sh --update` (nginx + middleware Traefik).
-2. Confira backend: `systemctl status legendas-backend` e `journalctl -u legendas-backend -n 50`.
-3. Confira disco: `df -h /opt/legendas-locais/data`.
-4. Se ainda falhar, aumente timeout do **Traefik** (entrypoint `websecure`) no `traefik.yml` da VPS:
-
-```yaml
-entryPoints:
-  websecure:
-    transport:
-      respondingTimeouts:
-        readTimeout: 0
-        writeTimeout: 0
-        idleTimeout: 3600s
-```
-
-5. Copie `deploy/traefik-dynamic-legendas.yml` para a pasta dynamic do Traefik e reinicie o Traefik.
+1. Ler este arquivo e `DEPLOY-HOSTED.md`
+2. SSH: `root@161.97.79.7`
+3. Editar em `/opt/legendas-locais` ou push + pull na VPS
+4. Rodar `bash deploy/setup.sh --update` após mudanças de código
+5. Verificar: `curl -sk https://app.clipsaas.site/api/health`
+6. **Nunca** commitar `.env`, chaves ou `data/jobs/`

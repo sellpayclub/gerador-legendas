@@ -1,9 +1,16 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import { CLIPSAAS_LOGO_URL } from "@/lib/brand";
+import Providers from "@/components/Providers";
+
+const isHosted = process.env.NEXT_PUBLIC_MULTI_TENANT === "true";
 
 export const metadata: Metadata = {
-  title: "Legendas Locais",
-  description: "Legendas automaticas estilo CapCut - uso pessoal",
+  title: isHosted ? "ClipSaaS — Gerador de Legendas" : "Legendas Locais",
+  description: isHosted
+    ? "Gere legendas e cortes virais com IA"
+    : "Legendas automaticas estilo CapCut - uso pessoal",
+  icons: isHosted ? { icon: CLIPSAAS_LOGO_URL, apple: CLIPSAAS_LOGO_URL } : undefined,
 };
 
 export default function RootLayout({
@@ -12,9 +19,11 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="pt-BR">
+    <html lang="pt-BR" suppressHydrationWarning>
       <body className="min-h-screen bg-bg text-zinc-100 antialiased">
-        <div className="mx-auto max-w-7xl px-4 py-6">{children}</div>
+        <Providers>
+          <div className="mx-auto max-w-7xl px-4 py-6">{children}</div>
+        </Providers>
       </body>
     </html>
   );

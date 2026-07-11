@@ -1,12 +1,9 @@
 "use client";
 
-type Step = 1 | 2 | 3;
+import { useMemo } from "react";
+import { useI18n } from "@/lib/i18n/context";
 
-const STEPS = [
-  { n: 1 as Step, label: "Cortes", shortLabel: "Cortes", hint: "Detectar e revisar trechos" },
-  { n: 2 as Step, label: "Legendas", shortLabel: "Legendas", hint: "Estilo e texto" },
-  { n: 3 as Step, label: "Exportar", shortLabel: "Export", hint: "Gerar e baixar MP4s" },
-];
+type Step = 1 | 2 | 3;
 
 type Props = {
   step: Step;
@@ -14,10 +11,22 @@ type Props = {
 };
 
 export default function CortesStepBar({ step, onStep }: Props) {
+  const { t } = useI18n();
+  const steps = useMemo(
+    () =>
+      ([1, 2, 3] as Step[]).map((n) => ({
+        n,
+        label: t(`cortes.steps.${n}.label`),
+        shortLabel: n === 3 ? t(`cortes.steps.${n}.short`) : t(`cortes.steps.${n}.label`),
+        hint: t(`cortes.steps.${n}.hint`),
+      })),
+    [t],
+  );
+
   return (
     <div className="mb-3 shrink-0 rounded-xl border border-border bg-panel px-2 py-2 sm:px-4 sm:py-2.5">
       <div className="flex items-center gap-1 sm:gap-2">
-        {STEPS.map((s, i) => {
+        {steps.map((s, i) => {
           const active = step === s.n;
           const done = step > s.n;
           const clickable = onStep && (done || s.n <= step);
