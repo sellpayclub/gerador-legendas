@@ -3,6 +3,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Play, Pause, SkipBack, SkipForward, Move } from "lucide-react";
 import type { StyleConfig, Word } from "@/lib/api";
+import { videoUrl } from "@/lib/api";
+import { isMultiTenant } from "@/lib/hosted";
+import { useAccessToken } from "@/lib/useAccessToken";
 import KaraokeLine, { heroOutlineStyle } from "@/components/KaraokeLine";
 import {
   findActiveGroup,
@@ -17,6 +20,9 @@ import {
   groupWordsByPause,
   trimWordEnds,
 } from "@/lib/timing";
+import { fakeProgress } from "@/lib/fakeProgress";
+import { clampProgressHeightPct } from "@/lib/composeLayout";
+import type { ComposeSettings } from "@/lib/api";
 
 /** Shown on the preview while transcription is pending or returned empty. */
 const PLACEHOLDER_WORDS: Word[] = [
@@ -34,7 +40,12 @@ type Props = {
   wordsPerLine: number;
   onPositionChange: (pos: { x: number; y: number }) => void;
   position: { x: number | null; y: number | null };
-  registerControls?: (controls: { seek: (t: number) => void; getCurrentTime: () => number }) => void;
+  registerControls?: (controls: {
+    seek: (t: number, opts?: { play?: boolean }) => void;
+    play: () => void;
+    pause: () => void;
+    getCurrentTime: () => number;
+  }) => void;
   /** Limit video height to fit viewport (editor split layout). */
   compact?: boolean;
   /** Override max-height in compact mode (e.g. when parent constrains height). */
@@ -46,6 +57,8 @@ type Props = {
   activeClip?: { start: number; end: number } | null;
   /** When "cover", simulates 9:16 crop (vertical export preview). */
   videoObjectFit?: "contain" | "cover";
+  compose?: ComposeSettings;
+  progressTime?: number;
 };
 
 /**
@@ -74,8 +87,17 @@ export default function VideoPreview({
   highlightPhrases = [],
   activeClip = null,
   videoObjectFit = "contain",
+  compose,
+  progressTime,
 }: Props & { isPlaceholder?: boolean }) {
+  const accessToken = useAccessToken();
+  const hosted = isMultiTenant();
+  const mainVideoSrc = useMemo(() => {
+    if (hosted && !accessToken) return null;
+    return videoUrl(jobId, accessToken);
+  }, [jobId, accessToken, hosted]);
   const videoRef = useRef<HTMLVideoElement>(null);
+  const frameRef = useRef<HTMLDivElement>(null);
   const overlayRef = useRef<HTMLDivElement>(null);
   const [videoRect, setVideoRect] = useState<{ w: number; h: number } | null>(null);
   const [currentTime, setCurrentTime] = useState(0);
@@ -148,16 +170,28 @@ export default function VideoPreview({
   useEffect(() => {
     if (!registerControls) return;
     registerControls({
-      seek: (t: number) => {
+      seek: (t: number, opts?: { play?: boolean }) => {
         const v = videoRef.current;
         if (v) {
           v.currentTime = t;
-          v.play().catch(() => {});
+          setCurrentTime(t);
+          if (opts?.play) v.play().catch(() => {});
         }
+      },
+      play: () => {
+        videoRef.current?.play().catch(() => {});
+      },
+      pause: () => {
+        videoRef.current?.pause();
       },
       getCurrentTime: () => videoRef.current?.currentTime ?? 0,
     });
   }, [registerControls]);
+
+  useEffect(() => {
+    videoRef.current?.pause();
+    setPlaying(false);
+  }, [jobId]);
 
   // Drag handling
   const onPointerDown = useCallback(
@@ -198,11 +232,16 @@ export default function VideoPreview({
   const overlayCssX = pos.x * scaleX;
   const overlayCssY = pos.y * scaleY;
 
+  const playbackTime = progressTime ?? currentTime;
+  const progressPct = compose?.progress_enabled && duration > 0
+    ? fakeProgress(Math.max(0, playbackTime), duration) * 100
+    : 0;
+
   const renderGroup = () => {
     if (!activeGroup) return null;
     if (showHero) return null;
     const groupActiveIdx = activeGroup.findIndex(
-      (w) => isWordActive(w, currentTime) || displayWords.indexOf(w) === previewActiveIdx,
+      (w) => isWordActive(w, playbackTime) || displayWords.indexOf(w) === previewActiveIdx,
     );
     return (
       <KaraokeLine
@@ -241,33 +280,53 @@ export default function VideoPreview({
   };
 
   const isPortrait = height > width;
-  const videoFrameStyle: React.CSSProperties = compact
-    ? {
-        aspectRatio: `${width} / ${height}`,
-        maxHeight: compactMaxHeight ?? "min(calc(100dvh - 11rem), 100%)",
-        width: isPortrait ? "auto" : "100%",
-        maxWidth: "100%",
-      }
-    : { aspectRatio: `${width} / ${height}` };
+  const defaultCompactMax = "calc(70dvh - 4rem)";
+  const effectiveMaxHeight = compactMaxHeight ?? (compact ? defaultCompactMax : "100%");
+  const effectiveMaxWidth = (!isPortrait && compact) ? "400px" : "100%";
 
   return (
     <div className={`flex w-full flex-col gap-2 ${compact ? "h-full max-h-full items-center" : ""}`}>
       <div
-        className={`relative overflow-hidden rounded-xl bg-black ${compact ? "mx-auto shrink-0" : "w-full"}`}
-        style={videoFrameStyle}
+        ref={frameRef}
+        className={`relative overflow-hidden rounded-xl bg-black shadow-lg ${compact ? "mx-auto shrink-0" : "mx-auto"}`}
+        style={{ 
+          aspectRatio: `${width} / ${height}`,
+          maxHeight: effectiveMaxHeight,
+          maxWidth: effectiveMaxWidth,
+          height: isPortrait ? "100%" : "auto",
+          width: isPortrait ? "auto" : "100%",
+        }}
       >
-        <video
-          ref={videoRef}
-          src={`/api/jobs/${jobId}/video`}
-          className={`h-full w-full transition-[filter] duration-200 ${
-            videoObjectFit === "cover" ? "object-cover" : "object-contain"
-          }`}
+        {/* Invisible SVG element to force correct aspect-ratio scaling bounds */}
+        <svg
+          viewBox={`0 0 ${width} ${height}`}
+          className="pointer-events-none invisible block"
           style={{
-            filter: highlightBlur ? "blur(16px) brightness(0.72) saturate(0.75)" : "none",
+            width: isPortrait ? "auto" : "100%",
+            height: isPortrait ? "100%" : "auto",
           }}
-          playsInline
-          onClick={togglePlay}
+          aria-hidden="true"
         />
+        {mainVideoSrc ? (
+          <video
+            key={mainVideoSrc}
+            ref={videoRef}
+            src={mainVideoSrc}
+            className={`absolute inset-0 h-full w-full transition-[filter] duration-200 ${
+              videoObjectFit === "cover" ? "object-cover" : "object-contain"
+            }`}
+            style={{
+              filter: highlightBlur ? "blur(16px) brightness(0.72) saturate(0.75)" : "none",
+            }}
+            playsInline
+            preload="auto"
+            onClick={togglePlay}
+          />
+        ) : (
+          <div className="absolute inset-0 flex h-full min-h-[120px] w-full items-center justify-center text-sm text-zinc-500">
+            Carregando vídeo…
+          </div>
+        )}
 
         {/* Hero phrase — big, centered */}
         {showHero && heroLayout && videoRect && (
@@ -328,23 +387,36 @@ export default function VideoPreview({
           </div>
         )}
 
-        <div className="pointer-events-none absolute bottom-2 left-2 flex items-center gap-1.5 rounded-lg bg-black/70 px-2.5 py-1.5 text-sm text-zinc-200 backdrop-blur-sm">
-          <Move className="h-4 w-4 shrink-0 text-accent" />
+        <div className="pointer-events-none absolute bottom-1.5 left-1.5 flex items-center gap-1 rounded-md bg-black/55 px-1.5 py-0.5 text-[10px] text-zinc-300 backdrop-blur-sm sm:text-[11px]">
+          <Move className="h-3 w-3 shrink-0 text-accent" />
           {isPlaceholder
-            ? "Arraste para posicionar (transcrição em andamento)"
-            : "Arraste para posicionar"}
+            ? "Arraste (transcrição em andamento)"
+            : "Arraste legenda"}
         </div>
+
+        {/* Progress Bar Fake (Espelhado do TemplatePreview) */}
+        {compose?.progress_enabled && (
+          <div
+            className="absolute bottom-0 left-0 z-50 pointer-events-none"
+            style={{
+              height: `${clampProgressHeightPct(compose.progress_height_pct) * 100}%`,
+              width: `${Math.min(100, Math.max(0, progressPct))}%`,
+              backgroundColor: compose.progress_color || "#E31B23",
+              transition: "width 0.1s linear",
+            }}
+          />
+        )}
       </div>
 
       {/* Custom controls */}
-      <div className={`relative flex shrink-0 items-center gap-2 rounded-lg border border-border bg-panel px-3 py-2 ${compact ? "w-full max-w-md" : "w-full"}`}>
-        <button onClick={() => seekRel(-5)} className="text-zinc-400 hover:text-zinc-100" title="-5s">
+      <div className={`relative flex shrink-0 items-center gap-2 rounded-xl border border-border bg-panel/80 px-2.5 py-2 shadow-sm backdrop-blur-sm ${compact ? "w-full max-w-md" : "w-full"}`}>
+        <button onClick={() => seekRel(-5)} className="text-zinc-400 transition hover:text-zinc-100" title="-5s">
           <SkipBack className="h-4 w-4" />
         </button>
-        <button onClick={togglePlay} className="text-zinc-100 hover:text-accent" title="Play/Pause">
+        <button onClick={togglePlay} className="flex h-9 w-9 items-center justify-center rounded-full bg-accent text-black transition hover:bg-accent/90" title="Play/Pause">
           {playing ? <Pause className="h-5 w-5" /> : <Play className="h-5 w-5" />}
         </button>
-        <button onClick={() => seekRel(5)} className="text-zinc-400 hover:text-zinc-100" title="+5s">
+        <button onClick={() => seekRel(5)} className="text-zinc-400 transition hover:text-zinc-100" title="+5s">
           <SkipForward className="h-4 w-4" />
         </button>
         <input
@@ -354,7 +426,7 @@ export default function VideoPreview({
           step={0.05}
           value={Math.min(currentTime, duration || 0)}
           onChange={onSeek}
-          className="relative z-10 flex-1"
+          className="relative z-10 flex-1 accent-[var(--accent)]"
         />
         {activeClip && duration > 0 && (
           <div
