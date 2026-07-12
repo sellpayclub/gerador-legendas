@@ -1049,7 +1049,7 @@ export default function CheckoutPage() {
                       }}>
                         <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
                           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ marginTop: 2, flexShrink: 0 }}><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line></svg>
-                          <div><strong>Empresa:</strong> GP NEGOCIOS DIGITAIS<br/>CNPJ: 40.170.238/0001-03 (Sorocaba)</div>
+                          <div><strong>Empresa:</strong> PLATAFORMA SELLPAY -TREINAMENTO, ASSESSORIA E CONSULTORIA LTDA<br/>CNPJ: 51.474.675/0001-03</div>
                         </div>
                         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>

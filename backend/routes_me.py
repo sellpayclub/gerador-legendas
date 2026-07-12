@@ -145,8 +145,10 @@ def _fulfill_if_paid(correlation_id: str, *, source: str) -> dict | None:
         return {"ok": False, "error": str(exc)}
 
 
+from fastapi import BackgroundTasks
+
 @router.post("/api/checkout/create-charge")
-async def create_checkout_charge(body: CreateChargeBody) -> dict:
+async def create_checkout_charge(body: CreateChargeBody, background_tasks: BackgroundTasks) -> dict:
     """Create a PIX charge via OpenPix and save the order."""
     if not is_multi_tenant():
         raise HTTPException(404, "not found")
@@ -205,14 +207,14 @@ async def create_checkout_charge(body: CreateChargeBody) -> dict:
         "fbp": (body.fbp or "").strip() or None,
     }
 
-    try:
-        await asyncio.to_thread(rest_upsert, "orders", order_data, on_conflict="correlation_id")
-    except Exception as exc:
-        log.warning("Failed to save order %s: %s", correlation_id, exc)
-
     from pix_pending_email import send_pix_pending_email
 
-    def _send_email() -> None:
+    def _background_work() -> None:
+        try:
+            rest_upsert("orders", order_data, on_conflict="correlation_id")
+        except Exception as exc:
+            log.warning("Failed to save order %s: %s", correlation_id, exc)
+
         try:
             send_pix_pending_email(
                 to_email=body.email.strip().lower(),
@@ -228,7 +230,7 @@ async def create_checkout_charge(body: CreateChargeBody) -> dict:
         except Exception as e:
             log.warning("Failed to send pix pending email instantly: %s", e)
             
-    asyncio.create_task(asyncio.to_thread(_send_email))
+    background_tasks.add_task(_background_work)
 
     return {
         "ok": True,
