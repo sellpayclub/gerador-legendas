@@ -98,7 +98,7 @@ export default function ClipComposePanel({
               className="w-full rounded-md border border-border bg-bg px-3 py-2 text-sm"
             >
               <option value="bold_red">Vermelho bold (Choquei)</option>
-              <option value="simple">Caixa simples</option>
+              <option value="simple">{t("template.styleSimple")}</option>
             </select>
           </Field>
         </>
@@ -194,7 +194,7 @@ function AssetBlock({
         <div className="flex items-center gap-2 rounded-lg border border-border px-2 py-2 text-xs">
           <ImageIcon className="h-3.5 w-3.5 shrink-0 text-accent" />
           <span className="flex-1 truncate">{filename}</span>
-          <button type="button" onClick={onPick} className="text-zinc-400 hover:text-zinc-100">Trocar</button>
+          <button type="button" onClick={onPick} className="text-zinc-400 hover:text-zinc-100">{t("template.change")}</button>
           <button type="button" onClick={onClear} className="text-zinc-400 hover:text-red-400"><Trash2 className="h-3.5 w-3.5" /></button>
         </div>
       )}

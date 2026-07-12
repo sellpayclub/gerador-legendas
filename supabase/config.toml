@@ -1,0 +1,10 @@
+project_id = "lcbczyzedluaoxtuajoz"
+
+[api]
+enabled = true
+
+[db]
+major_version = 15
+
+[functions.cakto-webhook]
+verify_jwt = false

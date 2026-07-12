@@ -216,8 +216,9 @@ def _draw_headline_line(
 
 def _line_ascent_descent(font: Any, emoji_font: Any) -> tuple[int, int]:
     a1, d1 = font.getmetrics()
-    a2, d2 = emoji_font.getmetrics()
-    return max(a1, a2), max(d1, d2)
+    # Emoji font is loaded at a massive fixed size and scaled down during drawing,
+    # so we should not include its unscaled metrics in the line height calculation.
+    return a1, d1
 
 
 def layout_headline_lines(
@@ -305,19 +306,21 @@ def render_headline_png(
     fg_hex = extras.headline_color or "#FFFFFF"
     align = extras.headline_align or "center"
     max_w = int(canvas_width * max(0.5, min(1.0, extras.headline_max_width_pct)))
+    content_w = max(20, max_w - border * 2)
 
     font = _load_font(fs, bold=(style == "bold_red"))
     emoji_font = _load_emoji_font(fs)
     emoji_h = _emoji_target_height(font)
     measure = Image.new("RGBA", (max_w + border * 4, 5000), (0, 0, 0, 0))
     mdraw = ImageDraw.Draw(measure)
-    lines = layout_headline_lines(mdraw, display, font, max_w, emoji_font, emoji_h)
+    lines = layout_headline_lines(mdraw, display, font, content_w, emoji_font, emoji_h)
 
-    ascent, descent = _line_ascent_descent(font, emoji_font)
-    line_h = ascent + descent
-    spacing = max(2, fs // 12)
-    content_h = line_h * len(lines) + spacing * max(0, len(lines) - 1)
-    content_w = max_w
+    # Mimic CSS line-height: 1.1 and baseline positioning
+    line_h = int(fs * 1.1)
+    content_h = line_h * max(1, len(lines))
+    baseline_offset = int(fs * 0.8)
+    
+    content_w = max(20, max_w - border * 2)
     total_w = content_w + border * 2
     total_h = content_h + border * 2
 
@@ -328,18 +331,19 @@ def render_headline_png(
     radius = headline_box_radius(style)
     draw.rounded_rectangle((0, 0, total_w, total_h), radius=radius, fill=(*bg, 255))
 
-    y_cursor = border
+    y = border + baseline_offset
     for line in lines:
-        lw = int(_headline_line_width(draw, line if line else " ", font, emoji_font, emoji_h))
-        if align == "left":
-            x = border
-        elif align == "right":
-            x = total_w - border - lw
-        else:
-            x = border + max(0, (content_w - lw) // 2)
-        baseline = y_cursor + ascent
-        _draw_headline_line(draw, img, x, baseline, line, font, emoji_font, fg, emoji_h)
-        y_cursor += line_h + spacing
+        if line.strip():
+            lw = int(_headline_line_width(draw, line if line else " ", font, emoji_font, emoji_h))
+            if align == "left":
+                x = border
+            elif align == "right":
+                x = total_w - border - lw
+            else:
+                x = border + max(0, (content_w - lw) // 2)
+
+            _draw_headline_line(draw, img, x, y, line, font, emoji_font, fg, emoji_h)
+        y += line_h
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     img.save(out_path, "PNG")

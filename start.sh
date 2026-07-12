@@ -16,7 +16,7 @@ cd "$ROOT/backend"
 source .venv/bin/activate
 .venv/bin/python -m uvicorn main:app --port 8000 --host 127.0.0.1 &
 BACKEND_PID=$!
-sleep 3
+sleep 6
 
 if ! curl -sf http://127.0.0.1:8000/api/health >/dev/null; then
   echo "ERRO: backend não subiu. Verifique backend/.env e ffmpeg-full."
@@ -24,15 +24,15 @@ if ! curl -sf http://127.0.0.1:8000/api/health >/dev/null; then
 fi
 echo "    Backend OK (PID $BACKEND_PID)"
 
-echo "==> Frontend (porta 3000)..."
+echo "==> Frontend (porta 3005)..."
 cd "$ROOT/frontend"
-npm run dev &
+npm run dev -- -p 3005 &
 FRONTEND_PID=$!
 sleep 5
 
 echo ""
 echo "============================================"
-echo "  Pronto! Abra: http://localhost:3000"
+echo "  Pronto! Abra: http://localhost:3005"
 echo "  Backend:    http://localhost:8000"
 echo "  Para parar: kill $BACKEND_PID $FRONTEND_PID"
 echo "============================================"

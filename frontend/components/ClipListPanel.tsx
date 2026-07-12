@@ -81,9 +81,9 @@ export default function ClipListPanel({
     <div className="flex flex-col gap-3 p-4">
       <div className="flex items-center justify-between gap-2">
         <div>
-          <h3 className="text-sm font-semibold text-zinc-100">Cortes sugeridos</h3>
+          <h3 className="text-sm font-semibold text-zinc-100">{t("cortes.clipList.title")}</h3>
           <p className="mt-0.5 text-xs text-zinc-500">
-            Marque os cortes · clique em «Ajustar corte» no fim da lista se quiser editar
+            {t("cortes.clipList.hint")}
           </p>
         </div>
         <button

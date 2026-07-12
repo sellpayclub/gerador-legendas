@@ -87,7 +87,7 @@ export default function ClipBoundsEditor({ clip, onChange }: Props) {
         <ChevronRight
           className={`h-4 w-4 shrink-0 text-zinc-500 transition ${open ? "rotate-90" : ""}`}
         />
-        <span className="shrink-0 text-xs font-medium text-zinc-300">Ajustar corte</span>
+        <span className="shrink-0 text-xs font-medium text-zinc-300">{t("cortes.clipList.adjustClip")}</span>
         {!open && (
           <span className="min-w-0 truncate text-xs text-zinc-500">
             {clip.title} · {fmtTime(clip.duration_s)}

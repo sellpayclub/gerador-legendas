@@ -100,8 +100,68 @@ export default function EditorPage() {
   const [keywords, setKeywords] = useState<number[]>([]);
   const [highlightEnabled, setHighlightEnabled] = useState(false);
   const [videoPos, setVideoPos] = useState<{ x: number; y: number }>({ x: 0.5, y: 0.5 });
-  const [rendering, setRendering] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
+  const [rendering, setRendering] = useState(false);
+
+  const isLoadedRef = useRef(false);
+
+  // Load editor settings on client-side mount
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(`legendas_locais_editor_settings_${jobId}`);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed.style) setStyle(parsed.style);
+        if (parsed.wordsPerLine !== undefined) setWordsPerLine(parsed.wordsPerLine);
+        if (parsed.position) setPosition(parsed.position);
+        if (parsed.selectedTemplate !== undefined) setSelectedTemplate(parsed.selectedTemplate);
+        if (parsed.resolution) setResolution(parsed.resolution);
+        if (parsed.overlayAsset !== undefined) setOverlayAsset(parsed.overlayAsset);
+        if (parsed.compose) setCompose((c) => ({ ...c, ...parsed.compose }));
+        if (parsed.keywords) setKeywords(parsed.keywords);
+        if (parsed.highlightEnabled !== undefined) setHighlightEnabled(parsed.highlightEnabled);
+        if (parsed.videoPos) setVideoPos(parsed.videoPos);
+      }
+    } catch (e) {
+      console.error("Failed to load editor settings:", e);
+    } finally {
+      isLoadedRef.current = true;
+    }
+  }, [jobId]);
+
+  // Auto-save editor settings on change
+  useEffect(() => {
+    if (!isLoadedRef.current) return;
+    const settings = {
+      style,
+      wordsPerLine,
+      position,
+      selectedTemplate,
+      resolution,
+      overlayAsset,
+      compose,
+      keywords,
+      highlightEnabled,
+      videoPos,
+    };
+    try {
+      localStorage.setItem(`legendas_locais_editor_settings_${jobId}`, JSON.stringify(settings));
+    } catch (e) {
+      console.error("Failed to save editor settings:", e);
+    }
+  }, [
+    jobId,
+    style,
+    wordsPerLine,
+    position,
+    selectedTemplate,
+    resolution,
+    overlayAsset,
+    compose,
+    keywords,
+    highlightEnabled,
+    videoPos,
+  ]);
 
   const videoControlsRef = useRef<{
     seek: (t: number, opts?: { play?: boolean }) => void;

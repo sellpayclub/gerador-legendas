@@ -122,6 +122,7 @@ def render_video(
 
     proc = subprocess.Popen(
         cmd, stderr=subprocess.PIPE, stdout=subprocess.DEVNULL,
+        stdin=subprocess.DEVNULL,
         text=True, bufsize=1,
     )
     assert proc.stderr is not None

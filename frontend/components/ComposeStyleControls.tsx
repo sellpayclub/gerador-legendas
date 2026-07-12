@@ -53,24 +53,24 @@ export default function ComposeStyleControls({
       {showHeadline && (
         <Section title="Headline" description="Fonte, largura e cores" collapsible defaultOpen>
           <div className="space-y-3">
-            <RangeField label="Tamanho fonte" min={24} max={72} value={compose.headline_font_size ?? 42}
+            <RangeField label={`${t("common.size")} fonte`} min={24} max={72} value={compose.headline_font_size ?? 42}
               onChange={(v) => onChange({ headline_font_size: v })} unit="px" />
-            <RangeField label="Largura" min={50} max={100}
+            <RangeField label={t("common.width")} min={50} max={100}
               value={Math.round(clampHeadlineWidthPct(compose.headline_max_width_pct) * 100)}
               onChange={(v) => onChange({ headline_max_width_pct: clampHeadlineWidthPct(v / 100) })} unit="%" />
             <label className="block">
-              <span className="label">Alinhamento</span>
+              <span className="label">{t("style.alignment")}</span>
               <select value={compose.headline_align ?? "center"}
                 onChange={(e) => onChange({ headline_align: e.target.value as ComposeSettings["headline_align"] })}
                 className={inputClass}>
-                <option value="left">Esquerda</option>
-                <option value="center">Centro</option>
-                <option value="right">Direita</option>
+                <option value="left">{t("style.alignLeft")}</option>
+                <option value="center">{t("style.alignCenter")}</option>
+                <option value="right">{t("style.alignRight")}</option>
               </select>
             </label>
-            <ColorField label="Fundo" value={compose.headline_bg ?? "#E31B23"}
+            <ColorField label={t("common.background")} value={compose.headline_bg ?? "#E31B23"}
               onChange={(v) => onChange({ headline_bg: v })} />
-            <ColorField label="Texto" value={compose.headline_color ?? "#FFFFFF"}
+            <ColorField label={t("common.text")} value={compose.headline_color ?? "#FFFFFF"}
               onChange={(v) => onChange({ headline_color: v })} />
           </div>
         </Section>
@@ -79,9 +79,9 @@ export default function ComposeStyleControls({
       {showInstagram && (
         <Section title="Header Instagram" description="Avatar, @ e caption" collapsible defaultOpen={false}>
           <div className="space-y-3">
-            <ColorField label="Fundo" value={compose.ig_bg_color ?? "#FFFFFF"}
+            <ColorField label={t("common.background")} value={compose.ig_bg_color ?? "#FFFFFF"}
               onChange={(v) => onChange({ ig_bg_color: v })} />
-            <ColorField label="Texto" value={compose.ig_text_color ?? "#141414"}
+            <ColorField label={t("common.text")} value={compose.ig_text_color ?? "#141414"}
               onChange={(v) => onChange({ ig_text_color: v })} />
             <RangeField label="Avatar" min={48} max={96} value={compose.ig_avatar_size ?? 72}
               onChange={(v) => onChange({ ig_avatar_size: v })} unit="px" />
@@ -107,9 +107,9 @@ export default function ComposeStyleControls({
       {showProgress && compose.progress_enabled && (
         <Section title="Barra de progresso" collapsible defaultOpen>
           <div className="space-y-3">
-            <ColorField label="Cor" value={compose.progress_color ?? "#E31B23"}
+            <ColorField label={t("common.color")} value={compose.progress_color ?? "#E31B23"}
               onChange={(v) => onChange({ progress_color: v })} />
-            <RangeField label="Altura" min={2} max={12}
+            <RangeField label={t("common.height")} min={2} max={12}
               value={Math.round(clampProgressHeightPct(compose.progress_height_pct) * 100)}
               onChange={(v) => onChange({ progress_height_pct: clampProgressHeightPct(v / 100) })} unit="%" />
           </div>

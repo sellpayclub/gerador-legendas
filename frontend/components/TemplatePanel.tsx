@@ -131,8 +131,8 @@ export default function TemplatePanel({
                     onChange={(e) => onComposeChange({ headline_style: e.target.value })}
                     className={inputClass}
                   >
-                    <option value="bold_red">Vermelho bold</option>
-                    <option value="simple">Caixa simples</option>
+                    <option value="bold_red">{t("template.styleBoldRed")}</option>
+                    <option value="simple">{t("template.styleSimple")}</option>
                   </select>
                 </Field>
               </div>
@@ -224,7 +224,7 @@ function UploadSection({ title, hint, filename, uploading, onUpload, onRemove }:
           <div className="flex items-center gap-2">
             <ImageIcon className="h-5 w-5 shrink-0 text-accent" />
             <span className="min-w-0 flex-1 truncate text-sm">{filename}</span>
-            <button onClick={onUpload} disabled={uploading} className="touch-target rounded-lg px-2 text-xs text-zinc-400 hover:text-zinc-100">Trocar</button>
+            <button onClick={onUpload} disabled={uploading} className="touch-target rounded-lg px-2 text-xs text-zinc-400 hover:text-zinc-100">{t("template.change")}</button>
             <IconButton onClick={onRemove} variant="danger" title="Remover">
               <Trash2 className="h-4 w-4" />
             </IconButton>

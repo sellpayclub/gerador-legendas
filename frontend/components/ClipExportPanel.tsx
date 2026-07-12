@@ -43,17 +43,16 @@ export default function ClipExportPanel({
   return (
     <div className="space-y-4 p-4">
       <div>
-        <h3 className="text-base font-semibold text-zinc-100">Exportar cortes</h3>
+        <h3 className="text-base font-semibold text-zinc-100">{t("cortes.export.title")}</h3>
         <p className="mt-1 text-sm text-muted">
-          Serão gerados <strong className="text-zinc-300">{enabled.length} arquivo(s) MP4</strong> —
-          um por corte marcado, com legenda editada. O vídeo original completo{" "}
-          <strong className="text-zinc-300">não</strong> é exportado.
+          {t("cortes.export.desc1")} <strong className="text-zinc-300">{enabled.length} {t("cortes.export.desc2")}</strong> {t("cortes.export.desc3")}{" "}
+          <strong className="text-zinc-300">{t("cortes.export.notExported")}</strong> {t("cortes.export.desc4")}
         </p>
       </div>
 
       <div className="flex items-center justify-between gap-2 rounded-xl border border-border bg-panel/50 px-4 py-3">
         <div>
-          <p className="label mb-0">Formato</p>
+          <p className="label mb-0">{t("cortes.export.format")}</p>
           <p className="text-sm font-medium text-zinc-200">{formatLabel}</p>
         </div>
         <button

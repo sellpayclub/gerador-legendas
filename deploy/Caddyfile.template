@@ -1,0 +1,30 @@
+# Gerado por deploy/setup.sh — não edite manualmente; rode install.sh de novo após mudar DOMAIN
+${DOMAIN} {
+	encode gzip
+
+	handle /api/* {
+		reverse_proxy 127.0.0.1:8000 {
+			transport http {
+				read_timeout 3600s
+				write_timeout 3600s
+			}
+		}
+	}
+
+	handle /webhooks/* {
+		reverse_proxy 127.0.0.1:8000 {
+			transport http {
+				read_timeout 120s
+				write_timeout 120s
+			}
+		}
+	}
+
+	handle {
+		reverse_proxy 127.0.0.1:3000
+	}
+
+	request_body {
+		max_size 10GB
+	}
+}

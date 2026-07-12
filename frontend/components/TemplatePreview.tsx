@@ -223,7 +223,7 @@ export default function TemplatePreview({
   const headlineRadius = headlineBorderRadius(headlineStyle, scaleY);
   const headlineCssFs = Math.max(10, Math.round(headlineFs * scaleY));
   const headlinePad = Math.max(4, Math.round(headlineBorder * scaleY));
-  const headlinePadX = Math.round(headlinePad * 0.85);
+  const headlinePadX = headlinePad;
   const headlineDisplay = headlineRaw.trim()
     ? headlineDisplayText(headlineRaw, headlineStyle)
     : "";
@@ -361,7 +361,7 @@ export default function TemplatePreview({
     ) : (
       <div className={`flex flex-col items-center justify-center gap-1 text-zinc-600 ${className}`}>
         <ImageIcon className="h-6 w-6" />
-        <span className="text-xs">Mídia</span>
+        <span className="text-xs">{t("template.media")}</span>
       </div>
     );
   };
