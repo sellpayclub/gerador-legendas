@@ -4,6 +4,7 @@ import type { ComposeSettings } from "@/lib/api";
 import { clampHeadlineWidthPct, clampProgressHeightPct } from "@/lib/composeLayout";
 import Section from "@/components/ui/Section";
 import { inputClass } from "@/components/ui/inputClass";
+import { useI18n } from "@/lib/i18n/context";
 
 type Props = {
   compose: ComposeSettings;
@@ -48,6 +49,7 @@ function RangeField({
 export default function ComposeStyleControls({
   compose, onChange, showHeadline, showInstagram, showProgress, showOverlayCrop,
 }: Props) {
+  const { t } = useI18n();
   return (
     <div className="space-y-3 p-3">
       {showHeadline && (
