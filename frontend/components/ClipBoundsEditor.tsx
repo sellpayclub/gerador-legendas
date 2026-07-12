@@ -6,7 +6,7 @@ import type { ClipSegment } from "@/lib/api";
 import { getClipPlaybackPlan } from "@/lib/clipPlayback";
 import Field from "@/components/ui/Field";
 import { inputClass } from "@/components/ui/inputClass";
-import { useLanguage } from "@/lib/i18n/context";
+import { useI18n } from "@/lib/i18n/context";
 
 type Props = {
   clip: ClipSegment | null;
@@ -35,7 +35,7 @@ function parseTime(input: string): number | null {
 
 export default function ClipBoundsEditor({ clip, onChange }: Props) {
   const [open, setOpen] = useState(false);
-  const { t } = useLanguage();
+  const { t } = useI18n();
 
   useEffect(() => {
     setOpen(false);
