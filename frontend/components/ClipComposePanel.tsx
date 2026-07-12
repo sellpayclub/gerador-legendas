@@ -8,6 +8,7 @@ import {
 } from "@/lib/api";
 import { needsOverlay, overlayAccepts } from "@/components/ClipFormatPicker";
 import ComposeStyleControls from "@/components/ComposeStyleControls";
+import { useI18n } from "@/lib/i18n/context";
 
 type Props = {
   jobId: string;
@@ -24,6 +25,7 @@ export default function ClipComposePanel({
   jobId, format, compose, onComposeChange,
   clipText, onClipTextChange, clipTextLabel,
 }: Props) {
+  const { t } = useI18n();
   const [assets, setAssets] = useState<AssetInfo[]>([]);
   const [uploading, setUploading] = useState<string | null>(null);
   const overlayRef = useRef<HTMLInputElement>(null);

@@ -4,6 +4,7 @@ import { useState } from "react";
 import { ChevronDown, ChevronUp, Loader2, Play, Sparkles, Trash2 } from "lucide-react";
 import type { ClipFocusType, ClipSegment } from "@/lib/api";
 import IconButton from "@/components/ui/IconButton";
+import { useI18n } from "@/lib/i18n/context";
 
 export const CLIP_FOCUS_OPTIONS: { id: ClipFocusType; label: string; desc: string }[] = [
   { id: "viral", label: "Viral", desc: "Ganchos fortes, apelo amplo (padrão)" },
@@ -51,8 +52,9 @@ export default function ClipListPanel({
   onReorder,
   focuses = [],
   onFocusesChange,
-  showFocusPicker = true,
+  showFocusPicker = false,
 }: Props) {
+  const { t } = useI18n();
   const [focusOpen, setFocusOpen] = useState(false);
   const enabledCount = clips.filter((c) => c.enabled).length;
   const focusDisabled = detecting || transcribing;

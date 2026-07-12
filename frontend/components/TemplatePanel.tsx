@@ -13,6 +13,7 @@ import Section from "@/components/ui/Section";
 import Field from "@/components/ui/Field";
 import IconButton from "@/components/ui/IconButton";
 import { inputClass } from "@/components/ui/inputClass";
+import { useI18n } from "@/lib/i18n/context";
 
 type Props = {
   jobId: string;
@@ -35,6 +36,7 @@ export default function TemplatePanel({
   overlayAsset, onOverlayAssetChange,
   compose, onComposeChange,
 }: Props) {
+  const { t } = useI18n();
   const [assets, setAssets] = useState<AssetInfo[]>([]);
   const [uploading, setUploading] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);

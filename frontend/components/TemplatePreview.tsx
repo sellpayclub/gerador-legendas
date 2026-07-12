@@ -30,6 +30,7 @@ import {
   trimWordEnds,
 } from "@/lib/timing";
 import { clampSubtitlePosition, resolveSubtitlePosition } from "@/lib/subtitlePosition";
+import { useI18n } from "@/lib/i18n/context";
 
 type Props = {
   jobId: string;
@@ -70,6 +71,7 @@ export default function TemplatePreview({
   compact = false,
   compactMaxHeight,
 }: Props) {
+  const { t } = useI18n();
   const accessToken = useAccessToken();
   const hosted = isMultiTenant();
   const mainVideoSrc = useMemo(() => {

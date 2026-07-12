@@ -6,6 +6,7 @@ import { clipOutputUrl } from "@/lib/api";
 import { isMultiTenant } from "@/lib/hosted";
 import { useAccessToken } from "@/lib/useAccessToken";
 import { FORMAT_OPTIONS } from "@/components/ClipFormatPicker";
+import { useI18n } from "@/lib/i18n/context";
 
 type Props = {
   jobId: string;
@@ -34,6 +35,7 @@ export default function ClipExportPanel({
   renderingIds,
   onEditFormat,
 }: Props) {
+  const { t } = useI18n();
   const accessToken = useAccessToken();
   const hosted = isMultiTenant();
   const canDownload = !hosted || Boolean(accessToken);
