@@ -213,6 +213,7 @@ function UploadSection({ title, hint, filename, uploading, onUpload, onRemove }:
   title: string; hint: string; filename?: string | null; uploading: boolean;
   onUpload: () => void; onRemove: () => void;
 }) {
+  const { t } = useI18n();
   return (
     <Section title={title} description={hint}>
       {!filename ? (
