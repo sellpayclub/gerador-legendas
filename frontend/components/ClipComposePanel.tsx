@@ -184,6 +184,7 @@ function AssetBlock({
   assets: AssetInfo[]; current?: string | null;
   onSelect: (f: string) => void; onDelete: (f: string) => void;
 }) {
+  const { t } = useI18n();
   return (
     <Field label={label}>
       {!filename ? (
