@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import logging
+import time
+from collections import defaultdict
 from typing import Optional
 
 import requests
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 import app_settings
@@ -15,9 +17,44 @@ from openpix_fulfillment import fulfill_openpix_order
 from openai_chat import build_chat_payload
 from supabase_client import rest_get, rest_upsert
 from tenant import is_multi_tenant
-from user_secrets import save_user_openai_key, user_has_openai_key
+from user_secrets import get_user_openai_key, get_user_openai_key_status, save_user_openai_key
 
 log = logging.getLogger("legendas.routes_me")
+
+
+# ---------------------------------------------------------------------------
+#  Simple in-memory rate limiter for checkout endpoints
+# ---------------------------------------------------------------------------
+_rate_buckets: dict[str, list[float]] = defaultdict(list)
+_RATE_WINDOW_S = 60  # 1 minute window
+_RATE_MAX_CHECKOUT = 5  # max 5 create-charge per IP per minute
+_RATE_MAX_STATUS = 30  # max 30 status checks per IP per minute
+
+
+def _rate_limit(key: str, max_requests: int, request: Request) -> None:
+    """Raise 429 if the IP exceeds max_requests within the rate window."""
+    from client_ip import get_client_ip
+    ip = get_client_ip(request)
+    bucket_key = f"{key}:{ip}"
+    now = time.monotonic()
+    # Purge old entries
+    _rate_buckets[bucket_key] = [
+        t for t in _rate_buckets[bucket_key] if now - t < _RATE_WINDOW_S
+    ]
+    if len(_rate_buckets[bucket_key]) >= max_requests:
+        raise HTTPException(429, "Muitas requisições. Aguarde um momento.")
+    _rate_buckets[bucket_key].append(now)
+
+
+# ---------------------------------------------------------------------------
+#  Server-side price catalog — NEVER trust the frontend price
+# ---------------------------------------------------------------------------
+_PRICE_CATALOG: dict[str, int] = {
+    "clipsaas-main": 3700,    # R$ 37,00 (ClipSaaS — Gerador de Legendas)
+    "bump-whatsapp": 990,     # R$ 9,90 (Suporte WhatsApp)
+    "bump-updates": 1990,     # R$ 19,90 (Atualizações Futuras)
+    "bump-guide": 2990,       # R$ 29,90 (Guia Digital)
+}
 
 router = APIRouter()
 
@@ -62,11 +99,13 @@ class CaktoWebhookBody(BaseModel):
 @router.get("/api/me")
 async def get_me(user: UserContext = Depends(get_current_user)) -> dict:
     u = await require_user(user)
+    key_state = get_user_openai_key_status(u.user_id)
     return {
         "user_id": u.user_id,
         "email": u.email,
         "access_active": u.access_active,
-        "openai_configured": user_has_openai_key(u.user_id),
+        "openai_configured": bool(key_state["configured"]),
+        "openai_key_status": key_state["status"],
         "multi_tenant": is_multi_tenant(),
         "job_max_age_hours": __import__("tenant").job_max_age_hours(),
     }
@@ -83,9 +122,16 @@ async def put_me_settings(
         raise HTTPException(400, "Informe sua API key OpenAI.")
     try:
         save_user_openai_key(u.user_id, key)
+        # Do not show success unless the exact value can be read back. This
+        # catches failed upserts and encryption-key configuration problems.
+        if get_user_openai_key(u.user_id) != key:
+            raise RuntimeError("A chave salva não pôde ser confirmada.")
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
-    return {"ok": True, "openai_configured": True}
+    except RuntimeError as exc:
+        log.exception("failed to verify saved OpenAI key for %s", u.user_id)
+        raise HTTPException(500, "Não foi possível confirmar a chave salva.") from exc
+    return {"ok": True, "openai_configured": True, "openai_key_status": "ready"}
 
 
 @router.post("/api/me/settings/test")
@@ -148,10 +194,60 @@ def _fulfill_if_paid(correlation_id: str, *, source: str) -> dict | None:
 from fastapi import BackgroundTasks
 
 @router.post("/api/checkout/create-charge")
-async def create_checkout_charge(body: CreateChargeBody, background_tasks: BackgroundTasks) -> dict:
+async def create_checkout_charge(
+    body: CreateChargeBody,
+    background_tasks: BackgroundTasks,
+    request: Request,
+) -> dict:
     """Create a PIX charge via OpenPix and save the order."""
     if not is_multi_tenant():
         raise HTTPException(404, "not found")
+
+    _rate_limit("create-charge", _RATE_MAX_CHECKOUT, request)
+
+    # --- Server-side price validation ---
+    # Calculate expected total from the catalog; reject if client total differs.
+    expected_total = 0
+    item_ids = [item.id for item in body.items]
+    if item_ids.count("clipsaas-main") != 1:
+        raise HTTPException(400, "O produto principal deve aparecer uma única vez.")
+    if len(item_ids) != len(set(item_ids)):
+        raise HTTPException(400, "O carrinho contém produtos duplicados.")
+    for item in body.items:
+        catalog_price = _PRICE_CATALOG.get(item.id)
+        if catalog_price is None:
+            log.warning(
+                "create-charge: unknown product id %s (client_price=%d)",
+                item.id,
+                item.price_cents,
+            )
+            raise HTTPException(
+                400,
+                f"Produto desconhecido: {item.id}. Recarregue a página.",
+            )
+        if item.price_cents != catalog_price:
+            log.warning(
+                "create-charge: price mismatch for %s: client=%d server=%d",
+                item.id,
+                item.price_cents,
+                catalog_price,
+            )
+            raise HTTPException(
+                400,
+                "Preço inválido. Recarregue a página e tente novamente.",
+            )
+        expected_total += catalog_price
+
+    if body.total_cents != expected_total:
+        log.warning(
+            "create-charge: total mismatch: client=%d expected=%d",
+            body.total_cents,
+            expected_total,
+        )
+        raise HTTPException(
+            400,
+            "Total inválido. Recarregue a página e tente novamente.",
+        )
 
     correlation_id = generate_correlation_id()
 
@@ -186,13 +282,17 @@ async def create_checkout_charge(body: CreateChargeBody, background_tasks: Backg
 
     # Save order in Supabase
     import json
+    from crypto_util import encrypt_text
+
+    # Encrypt CPF for LGPD compliance — never store in plain text
+    cpf_encrypted = encrypt_text(cpf_clean) if cpf_clean else ""
 
     order_data = {
         "correlation_id": correlation_id,
         "customer_name": body.name,
         "customer_email": body.email.strip().lower(),
         "customer_whatsapp": body.whatsapp,
-        "customer_cpf": cpf_clean,
+        "customer_cpf": cpf_encrypted,
         "items": json.dumps([item.dict() for item in body.items]),
         "total_cents": body.total_cents,
         "status": "pending",
@@ -209,12 +309,23 @@ async def create_checkout_charge(body: CreateChargeBody, background_tasks: Backg
 
     from pix_pending_email import send_pix_pending_email
 
-    def _background_work() -> None:
-        try:
-            rest_upsert("orders", order_data, on_conflict="correlation_id")
-        except Exception as exc:
-            log.warning("Failed to save order %s: %s", correlation_id, exc)
+    # Persist before returning: polling and webhooks can arrive immediately
+    # after charge creation and fulfillment requires this row to exist.
+    try:
+        await asyncio.to_thread(
+            rest_upsert,
+            "orders",
+            order_data,
+            on_conflict="correlation_id",
+        )
+    except Exception as exc:
+        log.exception("Failed to save order %s", correlation_id)
+        raise HTTPException(
+            502,
+            "Cobrança criada, mas não foi possível registrar o pedido. Contate o suporte.",
+        ) from exc
 
+    def _background_work() -> None:
         try:
             send_pix_pending_email(
                 to_email=body.email.strip().lower(),
@@ -242,10 +353,12 @@ async def create_checkout_charge(body: CreateChargeBody, background_tasks: Backg
 
 
 @router.get("/api/checkout/status/{correlation_id}")
-async def checkout_charge_status(correlation_id: str) -> dict:
+async def checkout_charge_status(correlation_id: str, request: Request) -> dict:
     """Check PIX charge payment status; fulfill access when payment completes."""
     if not is_multi_tenant():
         raise HTTPException(404, "not found")
+
+    _rate_limit("checkout-status", _RATE_MAX_STATUS, request)
 
     order = _get_checkout_order(correlation_id)
     fallback_charge_id = str(order.get("openpix_charge_id") or "") if order else ""
@@ -269,10 +382,12 @@ async def checkout_charge_status(correlation_id: str) -> dict:
 
 
 @router.post("/api/checkout/fulfill/{correlation_id}")
-async def checkout_fulfill(correlation_id: str) -> dict:
+async def checkout_fulfill(correlation_id: str, request: Request) -> dict:
     """Safety net: activate access after payment (confirmacao page / retries)."""
     if not is_multi_tenant():
         raise HTTPException(404, "not found")
+
+    _rate_limit("checkout-fulfill", _RATE_MAX_CHECKOUT, request)
 
     order = _get_checkout_order(correlation_id)
     if not order:

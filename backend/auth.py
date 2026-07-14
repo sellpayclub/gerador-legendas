@@ -25,13 +25,10 @@ class UserContext:
 def _auth_api_key() -> str:
     key = (os.environ.get("SUPABASE_ANON_KEY") or "").strip()
     if not key:
-        key = (os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or "").strip()
-    if not key:
-        raise RuntimeError("SUPABASE_ANON_KEY ou SUPABASE_SERVICE_ROLE_KEY não configurada.")
-    if not (os.environ.get("SUPABASE_ANON_KEY") or "").strip():
-        # Using service role key as fallback — this is intentional but note
-        # that it has admin privileges. The anon key should always be set.
-        log.warning("_auth_api_key: using SUPABASE_SERVICE_ROLE_KEY (anon key not set)")
+        raise RuntimeError(
+            "SUPABASE_ANON_KEY não configurada. "
+            "Defina no .env para validar tokens de autenticação."
+        )
     return key
 
 

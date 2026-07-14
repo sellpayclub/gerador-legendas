@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import platform
 import subprocess
+from functools import lru_cache
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -13,6 +14,7 @@ import effects as fx
 FONTS_DIR = Path(__file__).resolve().parent / "fonts"
 
 
+@lru_cache(maxsize=1)
 def _hw_encoder_available() -> bool:
     if platform.system() != "Darwin":
         return False
@@ -93,8 +95,36 @@ def _build_cmd(
     else:
         cmd += ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20"]
 
-    cmd += ["-c:a", "copy", "-movflags", "+faststart", str(out)]
+    # The input may be WebM/Opus or MOV/PCM. Copying those codecs into MP4
+    # produces files with poor browser/device compatibility (or fails outright).
+    cmd += ["-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", str(out)]
     return cmd
+
+
+def _run_ffmpeg(
+    cmd: list[str],
+    duration: float,
+    on_progress: Optional[Callable[[float, str], None]],
+) -> tuple[int, str]:
+    proc = subprocess.Popen(
+        cmd, stderr=subprocess.PIPE, stdout=subprocess.DEVNULL,
+        stdin=subprocess.DEVNULL,
+        text=True, bufsize=1,
+    )
+    assert proc.stderr is not None
+    stderr_tail: list[str] = []
+    try:
+        for line in proc.stderr:
+            stderr_tail.append(line)
+            if len(stderr_tail) > 40:
+                stderr_tail.pop(0)
+            p = parse_progress(line, duration)
+            if p is not None and on_progress:
+                on_progress(p, f"Renderizando... {int(p * 100)}%")
+        return proc.wait(), "".join(stderr_tail)[-800:]
+    finally:
+        if proc.poll() is None:
+            proc.kill()
 
 
 def render_video(
@@ -120,27 +150,18 @@ def render_video(
     if on_progress:
         on_progress(0.0, f"Renderizando ({'HW' if hw else 'CPU'})...")
 
-    proc = subprocess.Popen(
-        cmd, stderr=subprocess.PIPE, stdout=subprocess.DEVNULL,
-        stdin=subprocess.DEVNULL,
-        text=True, bufsize=1,
-    )
-    assert proc.stderr is not None
-    stderr_tail: list[str] = []
-    try:
-        for line in proc.stderr:
-            stderr_tail.append(line)
-            if len(stderr_tail) > 40:
-                stderr_tail.pop(0)
-            p = parse_progress(line, duration)
-            if p is not None and on_progress:
-                on_progress(p, f"Renderizando... {int(p * 100)}%")
-        rc = proc.wait()
-        if rc != 0:
-            tail = "".join(stderr_tail)[-800:]
-            raise RuntimeError(f"ffmpeg exited with {rc}: {tail}")
+    rc, tail = _run_ffmpeg(cmd, duration, on_progress)
+    if rc != 0 and hw:
+        if out_path.exists():
+            out_path.unlink()
         if on_progress:
-            on_progress(1.0, "Render completo")
-    finally:
-        if proc.poll() is None:
-            proc.kill()
+            on_progress(0.0, "Encoder de hardware indisponível; usando CPU...")
+        cpu_cmd = _build_cmd(
+            video, ass_path, out_path, False, duration, canvas_w, canvas_h,
+            highlight_phrases, extras,
+        )
+        rc, tail = _run_ffmpeg(cpu_cmd, duration, on_progress)
+    if rc != 0:
+        raise RuntimeError(f"ffmpeg exited with {rc}: {tail}")
+    if on_progress:
+        on_progress(1.0, "Render completo")

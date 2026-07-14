@@ -119,7 +119,11 @@ def resolution_dims(res_id: str, tpl: TemplateDef) -> tuple[int, int]:
         scale = short / w
     else:
         scale = short / h
-    return (max(2, round(w * scale)), max(2, round(h * scale)))
+    # H.264 yuv420p requires even dimensions. A 9:16 canvas at 480p would
+    # otherwise become 480x853 and fail only at the end of the user workflow.
+    out_w = max(2, round(w * scale))
+    out_h = max(2, round(h * scale))
+    return (out_w + out_w % 2, out_h + out_h % 2)
 
 
 def get_template(tid: str | None) -> TemplateDef | None:

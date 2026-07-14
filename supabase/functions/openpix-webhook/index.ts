@@ -11,7 +11,6 @@ import {
   sendPixPendingEmail,
   type PixPendingEmailData,
 } from "../_shared/pix-pending-email.ts";
-
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -221,7 +220,6 @@ async function handleChargeCompleted(
 
     const email = String(order.customer_email).trim().toLowerCase();
     const customerName = String(order.customer_name || "").trim();
-    const password = generatePassword();
 
     const { data: profiles } = await supabase
       .from("profiles")
@@ -230,8 +228,13 @@ async function handleChargeCompleted(
       .limit(1);
 
     let userId = profiles?.[0]?.id ? String(profiles[0].id) : null;
+    let isNewUser = false;
+    let password: string | null = null;
 
     if (!userId) {
+      // New user — generate a password for first-time login
+      password = generatePassword();
+      isNewUser = true;
       const { data: created, error: createError } =
         await supabase.auth.admin.createUser({
           email,
@@ -241,13 +244,8 @@ async function handleChargeCompleted(
       if (createError) throw new Error(`create user: ${createError.message}`);
       userId = created.user?.id ?? null;
       if (!userId) throw new Error("create user: missing id");
-    } else {
-      const { error: pwError } = await supabase.auth.admin.updateUserById(
-        userId,
-        { password },
-      );
-      if (pwError) throw new Error(`set password: ${pwError.message}`);
     }
+    // Existing user — do NOT reset their password (prevents account takeover)
 
     const { error: profileError } = await supabase
       .from("profiles")
@@ -297,7 +295,7 @@ async function handleChargeCompleted(
         paidAt: new Date().toLocaleDateString("pt-BR"),
         accessLink,
         loginUrl,
-        loginPassword: password,
+        loginPassword: isNewUser ? password : null,
       };
 
       const html = buildPurchaseEmailHtml(emailData);
@@ -379,9 +377,43 @@ async function handleChargeCompleted(
   }
 }
 
+/** Timing-safe string comparison to prevent timing attacks. */
+function timingSafeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  const encoder = new TextEncoder();
+  const bufA = encoder.encode(a);
+  const bufB = encoder.encode(b);
+  // Use constant-time comparison via crypto.subtle
+  let result = 0;
+  for (let i = 0; i < bufA.length; i++) {
+    result |= bufA[i] ^ bufB[i];
+  }
+  return result === 0;
+}
+
+function validateWebhookSecret(req: Request): boolean {
+  const expectedSecret = env("OPENPIX_WEBHOOK_SECRET");
+  if (!expectedSecret) {
+    console.warn("OPENPIX_WEBHOOK_SECRET not configured — webhook rejected for safety");
+    return false;
+  }
+  const receivedSecret = (req.headers.get("x-webhook-secret") ?? "").trim();
+  if (!receivedSecret) {
+    console.warn("openpix webhook: missing x-webhook-secret header");
+    return false;
+  }
+  return timingSafeEqual(receivedSecret, expectedSecret);
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method !== "POST") {
     return jsonResponse({ error: "method not allowed" }, 405);
+  }
+
+  // Validate webhook signature before processing any payload
+  if (!validateWebhookSecret(req)) {
+    console.warn("openpix webhook: invalid or missing secret — rejecting");
+    return jsonResponse({ error: "unauthorized" }, 401);
   }
 
   let body: Record<string, unknown>;

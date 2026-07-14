@@ -143,7 +143,7 @@ def clip_count(job_dir: Path) -> int:
 def _clip_target_count(duration: float) -> int:
     scaled = int(duration / 90)
     floor = MIN_CLIPS_TARGET if duration >= 900 else int(duration / 120)
-    return max(3, floor, min(MAX_CLIPS, scaled))
+    return min(MAX_CLIPS, max(3, floor, scaled))
 
 
 def slice_words(words: list[dict], t0: float, t1: float) -> list[dict]:
@@ -192,13 +192,12 @@ def merge_segment_words(words: list[dict], segments: list[dict]) -> list[dict]:
     out: list[dict] = []
     offset = 0.0
     for seg in segments:
-        i0 = int(seg["start_word_idx"])
-        i1 = int(seg["end_word_idx"])
-        src_start, src_end = _segment_time_bounds(words, i0, i1)
-        for i in range(i0, i1 + 1):
-            if i >= len(words):
-                break
-            w = words[i]
+        # Times are editable in the UI. They are the source of truth during
+        # export; stored word indices describe the original AI suggestion and
+        # may no longer match after the user adjusts a cold-open segment.
+        src_start = max(0.0, float(seg["start_s"]))
+        src_end = max(src_start, float(seg["end_s"]))
+        for w in words:
             ws = float(w["start"])
             we = float(w["end"])
             if we <= src_start or ws >= src_end:

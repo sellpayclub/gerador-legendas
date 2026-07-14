@@ -8,3 +8,6 @@ major_version = 15
 
 [functions.cakto-webhook]
 verify_jwt = false
+
+[functions.openpix-webhook]
+verify_jwt = false

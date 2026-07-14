@@ -4,6 +4,7 @@ from __future__ import annotations
 import platform
 import subprocess
 import tempfile
+from functools import lru_cache
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -23,6 +24,7 @@ FONTS_DIR = Path(__file__).resolve().parent / "fonts"
 _IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"}
 
 
+@lru_cache(maxsize=1)
 def _hw_encoder_available() -> bool:
     if platform.system() != "Darwin":
         return False
@@ -200,7 +202,7 @@ def _build_vstack_cmd(
     fg += f";[{final_label}]scale={out_w}:{out_h}:flags=lanczos[vout]"
 
     cmd += ["-filter_complex", fg, "-map", "[vout]", "-map", "0:a?"]
-    cmd += ["-c:a", "copy"]
+    cmd += ["-c:a", "aac", "-b:a", "192k"]
     if hw:
         cmd += ["-c:v", "h264_videotoolbox", "-b:v", "8M"]
     else:
@@ -281,13 +283,39 @@ def _build_header_hstack_cmd(
     fg += f";[{final_label}]scale={out_w}:{out_h}:flags=lanczos[vout]"
 
     cmd += ["-filter_complex", fg, "-map", "[vout]", "-map", "0:a?"]
-    cmd += ["-c:a", "copy"]
+    cmd += ["-c:a", "aac", "-b:a", "192k"]
     if hw:
         cmd += ["-c:v", "h264_videotoolbox", "-b:v", "8M"]
     else:
         cmd += ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20"]
     cmd += ["-pix_fmt", "yuv420p", "-movflags", "+faststart", "-t", f"{duration:.3f}", str(out_path)]
     return cmd
+
+
+def _run_compose_ffmpeg(
+    cmd: list[str],
+    duration: float,
+    on_progress: Optional[Callable[[float, str], None]],
+) -> tuple[int, str]:
+    proc = subprocess.Popen(
+        cmd, stderr=subprocess.PIPE, stdout=subprocess.DEVNULL,
+        stdin=subprocess.DEVNULL,
+        text=True, bufsize=1,
+    )
+    assert proc.stderr is not None
+    stderr_tail: list[str] = []
+    try:
+        for line in proc.stderr:
+            stderr_tail.append(line)
+            if len(stderr_tail) > 40:
+                stderr_tail.pop(0)
+            p = parse_progress(line, duration)
+            if p is not None and on_progress:
+                on_progress(p, f"Renderizando... {int(p * 100)}%")
+        return proc.wait(), "".join(stderr_tail)[-800:]
+    finally:
+        if proc.poll() is None:
+            proc.kill()
 
 
 def render_compose(
@@ -372,44 +400,40 @@ def render_compose(
 
     hw = _hw_encoder_available()
 
-    if tpl.layout == "header_hstack":
-        if overlay is None:
-            raise RuntimeError("Notícia Choquei exige imagem no painel esquerdo.")
-        if header_png is None:
-            raise RuntimeError("Falha ao gerar header Instagram.")
-        cmd = _build_header_hstack_cmd(
+    def build_cmd(use_hw: bool) -> list[str]:
+        if tpl.layout == "header_hstack":
+            if overlay is None:
+                raise RuntimeError("Notícia Choquei exige imagem no painel esquerdo.")
+            if header_png is None:
+                raise RuntimeError("Falha ao gerar header Instagram.")
+            return _build_header_hstack_cmd(
+                video, overlay, ass_path, out_path, tpl, phrases,
+                out_w, out_h, fps, duration, use_hw, video_pos, extras, header_png,
+            )
+        return _build_vstack_cmd(
             video, overlay, ass_path, out_path, tpl, phrases,
-            out_w, out_h, fps, duration, hw, video_pos, extras, header_png,
-        )
-    else:
-        cmd = _build_vstack_cmd(
-            video, overlay, ass_path, out_path, tpl, phrases,
-            out_w, out_h, fps, duration, hw, video_pos, extras,
+            out_w, out_h, fps, duration, use_hw, video_pos, extras,
             headline_png=headline_png,
         )
+
+    cmd = build_cmd(hw)
 
     if on_progress:
         on_progress(0.0, f"Compondo ({'HW' if hw else 'CPU'})...")
 
-    proc = subprocess.Popen(
-        cmd, stderr=subprocess.PIPE, stdout=subprocess.DEVNULL,
-        stdin=subprocess.DEVNULL,
-        text=True, bufsize=1,
-    )
-    assert proc.stderr is not None
     try:
-        for line in proc.stderr:
-            p = parse_progress(line, duration)
-            if p is not None and on_progress:
-                on_progress(p, f"Renderizando... {int(p * 100)}%")
-        rc = proc.wait()
+        rc, tail = _run_compose_ffmpeg(cmd, duration, on_progress)
+        if rc != 0 and hw:
+            if out_path.exists():
+                out_path.unlink()
+            if on_progress:
+                on_progress(0.0, "Encoder de hardware indisponível; usando CPU...")
+            rc, tail = _run_compose_ffmpeg(build_cmd(False), duration, on_progress)
         if rc != 0:
-            raise RuntimeError(f"ffmpeg exited with {rc} (veja logs/backend.log)")
+            raise RuntimeError(f"ffmpeg exited with {rc}: {tail}")
         if on_progress:
             on_progress(1.0, "Render completo")
     finally:
-        if proc.poll() is None:
-            proc.kill()
         for p in tmp_files:
             try:
                 Path(p).unlink(missing_ok=True)

@@ -68,6 +68,57 @@ def _payload_with_dims(payload: dict, dims: dict) -> dict:
 OPENAI_MAX_BYTES = int(os.environ.get("OPENAI_MAX_AUDIO_BYTES", str(24 * 1024 * 1024)))
 
 
+def _positive_env_int(name: str, default: int) -> int:
+    try:
+        return max(1, int(os.environ.get(name, str(default))))
+    except (TypeError, ValueError):
+        return default
+
+
+_TRANSCRIBE_SLOTS = threading.BoundedSemaphore(
+    _positive_env_int("MAX_CONCURRENT_TRANSCRIPTIONS", 3)
+)
+
+
+def _chunk_cache_path(chunk_path: Path) -> Path:
+    return chunk_path.with_suffix(chunk_path.suffix + ".transcript.json")
+
+
+def _load_chunk_cache(chunk_path: Path, language: Optional[str]) -> list[dict] | None:
+    cache_path = _chunk_cache_path(chunk_path)
+    if not cache_path.exists():
+        return None
+    try:
+        cached = json.loads(cache_path.read_text(encoding="utf-8"))
+        if cached.get("audio_bytes") != chunk_path.stat().st_size:
+            return None
+        if cached.get("language") != (language or ""):
+            return None
+        if cached.get("model") != get_openai_model():
+            return None
+        words = cached.get("words")
+        return words if isinstance(words, list) else None
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        return None
+
+
+def _save_chunk_cache(
+    chunk_path: Path,
+    language: Optional[str],
+    words: list[dict],
+) -> None:
+    cache_path = _chunk_cache_path(chunk_path)
+    temp_path = cache_path.with_suffix(cache_path.suffix + ".tmp")
+    payload = {
+        "audio_bytes": chunk_path.stat().st_size,
+        "language": language or "",
+        "model": get_openai_model(),
+        "words": words,
+    }
+    temp_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    temp_path.replace(cache_path)
+
+
 def _transcribe_openai(
     audio_wav: Path,
     out_json: Path,
@@ -105,15 +156,39 @@ def _transcribe_openai_chunked(
     import concurrent.futures
 
     def _process_chunk(args: tuple[int, tuple[Path, float]]) -> list[dict]:
-        i, (chunk_path, offset) = args
-        if on_progress:
-            on_progress(i / max(n, 1), f"Transcrevendo parte {i + 1}/{n}...")
+        _i, (chunk_path, offset) = args
+        cached = _load_chunk_cache(chunk_path, language)
+        if cached is not None:
+            return [
+                {
+                    **word,
+                    "start": round(float(word["start"]) + offset, 3),
+                    "end": round(float(word["end"]) + offset, 3),
+                }
+                for word in cached
+            ]
         data = _call_openai_transcribe(chunk_path, language)
-        return _extract_openai_words(data, time_offset=offset)
+        relative_words = _extract_openai_words(data)
+        _save_chunk_cache(chunk_path, language, relative_words)
+        return [
+            {
+                **word,
+                "start": round(float(word["start"]) + offset, 3),
+                "end": round(float(word["end"]) + offset, 3),
+            }
+            for word in relative_words
+        ]
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
-        for words in executor.map(_process_chunk, enumerate(chunks)):
+        for completed, words in enumerate(
+            executor.map(_process_chunk, enumerate(chunks)), start=1
+        ):
             all_words.extend(words)
+            if on_progress:
+                on_progress(
+                    completed / max(n, 1),
+                    f"Parte {completed}/{n} transcrita...",
+                )
 
     payload = _payload_with_dims({
         "duration": duration or (all_words[-1]["end"] if all_words else 0.0),
@@ -189,15 +264,45 @@ def _call_openai_transcribe(audio_path: Path, language: Optional[str]) -> dict:
         form_data.append(("language", lang))
 
     mime = "audio/mpeg" if audio_path.suffix.lower() == ".mp3" else "audio/wav"
-    with open(audio_path, "rb") as fh:
-        files = {"file": (audio_path.name, fh, mime)}
-        headers = {"Authorization": f"Bearer {api_key}"}
-        resp = requests.post(
-            get_openai_transcribe_url(), headers=headers, files=files, data=form_data, timeout=600,
-        )
-    if resp.status_code != 200:
-        raise RuntimeError(f"OpenAI API error {resp.status_code}: {resp.text[:500]}")
-    return resp.json()
+    headers = {"Authorization": f"Bearer {api_key}"}
+    attempts = max(1, int(os.environ.get("OPENAI_TRANSCRIBE_ATTEMPTS", "3")))
+    last_error: Exception | None = None
+    for attempt in range(attempts):
+        try:
+            # Reopen the stream on every attempt; requests consumes it.
+            with _TRANSCRIBE_SLOTS:
+                with open(audio_path, "rb") as fh:
+                    files = {"file": (audio_path.name, fh, mime)}
+                    resp = requests.post(
+                        get_openai_transcribe_url(),
+                        headers=headers,
+                        files=files,
+                        data=form_data,
+                        timeout=600,
+                    )
+            if resp.status_code == 200:
+                return resp.json()
+            error = RuntimeError(
+                f"OpenAI API error {resp.status_code}: {resp.text[:500]}"
+            )
+            # Authentication, malformed input and other permanent errors should
+            # be shown immediately rather than retried for several minutes.
+            if resp.status_code != 429 and resp.status_code < 500:
+                raise error
+            last_error = error
+            retry_after = resp.headers.get("Retry-After", "")
+            try:
+                delay = float(retry_after)
+            except (TypeError, ValueError):
+                delay = min(8.0, 2.0 ** attempt)
+        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as exc:
+            last_error = exc
+            delay = min(8.0, 2.0 ** attempt)
+
+        if attempt + 1 < attempts:
+            time.sleep(max(0.0, min(delay, 30.0)))
+
+    raise RuntimeError(f"Falha temporária ao transcrever após {attempts} tentativas: {last_error}")
 
 
 def _extract_openai_words(data: dict, *, time_offset: float = 0.0) -> list[dict]:

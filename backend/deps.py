@@ -10,7 +10,7 @@ from auth import UserContext, decode_bearer_token, get_current_user, require_act
 from db_jobs import job_owned_by
 from jobs import Job
 from tenant import is_multi_tenant
-from user_secrets import user_has_openai_key
+from user_secrets import get_user_openai_key_status
 
 
 async def optional_user(
@@ -38,10 +38,22 @@ async def mt_openai_user(
 ) -> Optional[UserContext]:
     if is_multi_tenant():
         u = await require_active_user(user)
-        if not user_has_openai_key(u.user_id):
+        key_state = get_user_openai_key_status(u.user_id)
+        if key_state["status"] == "unreadable":
+            raise HTTPException(
+                409,
+                detail={
+                    "code": "openai_key_unreadable",
+                    "message": "Sua chave salva precisa ser cadastrada novamente em Configurações.",
+                },
+            )
+        if not key_state["configured"]:
             raise HTTPException(
                 403,
-                "Configure sua chave OpenAI em Configurações antes de usar.",
+                detail={
+                    "code": "openai_key_missing",
+                    "message": "Configure sua chave OpenAI em Configurações antes de usar.",
+                },
             )
         return u
     return None

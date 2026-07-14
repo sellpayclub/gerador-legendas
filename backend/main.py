@@ -17,7 +17,7 @@ from pydantic import BaseModel
 
 import jobs
 from jobs import Job, Stage, create_job, get_job, event_stream, cleanup_old_jobs, rehydrate_jobs
-from media import ensure_ffmpeg, extract_audio, probe_video
+from media import ensure_ffmpeg, extract_audio, ffmpeg_bin, probe_video
 from presets import StyleConfig, apply_preset, list_presets
 from ass_gen import generate_ass
 from render import render_video
@@ -40,8 +40,50 @@ from routes_admin import router as admin_router
 
 log = logging.getLogger("legendas.main")
 
+# ---------------------------------------------------------------------------
+#  Simple in-memory rate limiter for expensive endpoints
+# ---------------------------------------------------------------------------
+from collections import defaultdict as _defaultdict
+
+_rate_buckets: dict[str, list[float]] = _defaultdict(list)
+_RATE_WINDOW_S = 60
+
+
+def _positive_env_int(name: str, default: int) -> int:
+    try:
+        return max(1, int(os.environ.get(name, str(default))))
+    except (TypeError, ValueError):
+        return default
+
+
+# FFmpeg saturates CPU/GPU and disk quickly. Queue excess work instead of
+# letting concurrent users make every render slower or crash the worker.
+_render_slots = asyncio.Semaphore(_positive_env_int("MAX_CONCURRENT_RENDERS", 1))
+_clip_detect_slots = asyncio.Semaphore(_positive_env_int("MAX_CONCURRENT_CLIP_DETECTIONS", 2))
+
+
+def _rate_limit_request(
+    key: str,
+    max_per_min: int,
+    request: Request,
+    identity: str | None = None,
+) -> None:
+    """Raise 429 if the client IP exceeds max_per_min within 60s."""
+    if identity:
+        subject = f"user:{identity}"
+    else:
+        from client_ip import get_client_ip
+        subject = f"ip:{get_client_ip(request)}"
+    bucket = f"{key}:{subject}"
+    now = time.monotonic()
+    _rate_buckets[bucket] = [t for t in _rate_buckets[bucket] if now - t < _RATE_WINDOW_S]
+    if len(_rate_buckets[bucket]) >= max_per_min:
+        raise HTTPException(429, "Muitas requisições. Aguarde um momento.")
+    _rate_buckets[bucket].append(now)
+
 _clip_detect_running: set[str] = set()
 _clip_render_running: set[str] = set()
+_video_render_running: set[str] = set()
 
 
 def _clip_render_key(job_id: str, clip_id: str) -> str:
@@ -96,6 +138,23 @@ async def _inject_user_context(request, call_next):
     return await call_next(request)
 
 
+@app.middleware("http")
+async def _security_headers(request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = (
+        "camera=(), microphone=(), geolocation=(), payment=()"
+    )
+    if is_multi_tenant():
+        response.headers["Strict-Transport-Security"] = (
+            "max-age=31536000; includeSubDomains"
+        )
+    return response
+
+
 def _cors_origins() -> list[str]:
     origins = app_settings.get_allowed_origins()
     if origins and "*" not in origins:
@@ -113,17 +172,36 @@ def _cors_origins() -> list[str]:
 def _configure_cors() -> None:
     origins = _cors_origins()
     if app_settings.cors_allow_all() or not origins:
-        log.warning(
-            "CORS allow-all mode enabled — credentials enabled with broad origin regex. "
-            "Set ALLOWED_ORIGINS explicitly for production."
-        )
-        app.add_middleware(
-            CORSMiddleware,
-            allow_origin_regex=r"https?://.*",
-            allow_credentials=False,
-            allow_methods=["*"],
-            allow_headers=["*"],
-        )
+        if is_multi_tenant():
+            # In hosted mode, NEVER allow wildcard CORS — force explicit origins.
+            log.error(
+                "CORS allow-all is BLOCKED in multi-tenant mode. "
+                "Set ALLOWED_ORIGINS explicitly. Falling back to APP_PUBLIC_URL."
+            )
+            public_url = os.environ.get("APP_PUBLIC_URL", "").strip().rstrip("/")
+            if public_url:
+                origins = [public_url]
+            else:
+                origins = ["https://app.clipsaas.site"]
+            app.add_middleware(
+                CORSMiddleware,
+                allow_origins=origins,
+                allow_credentials=True,
+                allow_methods=["*"],
+                allow_headers=["*"],
+            )
+        else:
+            log.warning(
+                "CORS allow-all mode enabled (self-hosted). "
+                "Set ALLOWED_ORIGINS explicitly for production."
+            )
+            app.add_middleware(
+                CORSMiddleware,
+                allow_origin_regex=r"https?://.*",
+                allow_credentials=False,
+                allow_methods=["*"],
+                allow_headers=["*"],
+            )
     else:
         app.add_middleware(
             CORSMiddleware,
@@ -598,9 +676,10 @@ async def put_settings_route(body: SettingsUpdate) -> dict:
 
 
 @app.post("/api/settings/test")
-async def test_settings_route(body: SettingsTestBody | None = None) -> dict:
+async def test_settings_route(request: Request, body: SettingsTestBody | None = None) -> dict:
     if is_multi_tenant():
         raise HTTPException(403, "Use /api/me/settings/test em modo hosted.")
+    _rate_limit_request("settings-test", 5, request)  # max 5/min per IP
     import requests
     from openai_chat import build_chat_payload
 
@@ -768,8 +847,9 @@ async def save_keywords_route(job_id: str, body: KeywordsUpdate,
 
 
 @app.post("/api/jobs/{job_id}/enrich")
-async def enrich_job(job_id: str, body: EnrichRequest,
+async def enrich_job(job_id: str, body: EnrichRequest, request: Request,
     user: Optional[UserContext] = Depends(mt_openai_user)) -> dict:
+    _rate_limit_request("enrich", 10, request, user.user_id if user else None)
     job = resolve_job(job_id, user)
     if not job.words_path or not job.words_path.exists():
         raise HTTPException(400, "transcribe first")
@@ -804,11 +884,13 @@ async def enrich_job(job_id: str, body: EnrichRequest,
 
 @app.post("/api/jobs")
 async def upload_job(
+    request: Request,
     user: Optional[UserContext] = Depends(mt_openai_user),
     file: UploadFile = File(...),
     language: str = Form("auto"),
     mode: str = Form("legendas"),
 ) -> dict:
+    _rate_limit_request("upload", 3, request, user.user_id if user else None)
     if not file.filename:
         raise HTTPException(400, "filename is required")
     suffix = Path(file.filename).suffix.lower()
@@ -858,7 +940,7 @@ async def _process_upload(job: Job) -> None:
             try:
                 target_path = job.video_path.with_suffix(".mp4")
                 proc = await asyncio.create_subprocess_exec(
-                    "ffmpeg", "-y", "-i", str(job.video_path),
+                    ffmpeg_bin(), "-y", "-i", str(job.video_path),
                     "-c:v", "libx264", "-preset", "veryfast", "-crf", "28",
                     "-c:a", "aac", "-movflags", "+faststart",
                     str(target_path),
@@ -930,8 +1012,9 @@ async def job_events(job_id: str,
 
 
 @app.post("/api/jobs/{job_id}/transcribe")
-async def transcribe_job(job_id: str,
+async def transcribe_job(job_id: str, request: Request,
     user: Optional[UserContext] = Depends(mt_openai_user)) -> dict:
+    _rate_limit_request("transcribe", 10, request, user.user_id if user else None)
     job = resolve_job(job_id, user)
     if job.stage == Stage.TRANSCRIBING:
         raise HTTPException(409, "transcription already running")
@@ -1040,13 +1123,15 @@ async def update_words(job_id: str, body: WordsUpdate,
 
 
 @app.post("/api/jobs/{job_id}/render")
-async def render_job(job_id: str, body: RenderRequest,
+async def render_job(job_id: str, body: RenderRequest, request: Request,
     user: Optional[UserContext] = Depends(mt_openai_user)) -> dict:
+    _rate_limit_request("render", 10, request, user.user_id if user else None)
     job = resolve_job(job_id, user)
     if not job.words_path or not job.words_path.exists():
         raise HTTPException(400, "transcribe first")
-    if job.stage == Stage.RENDERING:
+    if job.stage == Stage.RENDERING or job_id in _video_render_running:
         raise HTTPException(409, "render already running")
+    _video_render_running.add(job_id)
     asyncio.create_task(_run_render(job, body))
     return {"ok": True, "stage": job.stage.value}
 
@@ -1138,8 +1223,10 @@ async def _run_render(job: Job, body: RenderRequest) -> None:
                         canvas_h=data["height"],
                     )
 
-            job.update(Stage.RENDERING, 0.0, "Renderizando vídeo")
-            await asyncio.to_thread(work)
+            job.update(Stage.RENDERING, 0.0, "Aguardando fila de renderização...")
+            async with _render_slots:
+                job.update(Stage.RENDERING, 0.0, "Renderizando vídeo")
+                await asyncio.to_thread(work)
             job.update(Stage.DONE, 1.0, "Pronto")
             try:
                 if job.audio_path and job.audio_path.exists():
@@ -1148,6 +1235,8 @@ async def _run_render(job: Job, body: RenderRequest) -> None:
                 pass
         except Exception as e:
             job.update(Stage.ERROR, 0.0, f"render falhou: {e}")
+        finally:
+            _video_render_running.discard(job.id)
 
 
 @app.get("/api/jobs/{job_id}/output.mp4")
@@ -1174,9 +1263,10 @@ async def download_input(job_id: str,
 # ---------- clips (Cortes mode) ----------
 
 @app.post("/api/jobs/{job_id}/clips/detect")
-async def detect_clips_route(job_id: str,
+async def detect_clips_route(job_id: str, request: Request,
     body: DetectClipsRequest | None = None,
     user: Optional[UserContext] = Depends(mt_openai_user)) -> dict:
+    _rate_limit_request("clip-detect", 5, request, user.user_id if user else None)
     job = resolve_job(job_id, user)
     if not job.words_path or not job.words_path.exists():
         raise HTTPException(400, "transcribe first")
@@ -1199,10 +1289,11 @@ async def _run_clip_detect(job: Job, focuses: list[str] | None = None) -> None:
             lang = job.language if job.language and job.language != "auto" else "auto"
             clips.mark_detecting(job.job_dir())
             job.update(message="Detectando cortes com IA (vídeos longos podem levar 5–15 min)...")
-            result = await asyncio.to_thread(
-                clips.detect_clips, words, job.job_dir(),
-                duration=job.duration, language=lang, force=True, focuses=focuses,
-            )
+            async with _clip_detect_slots:
+                result = await asyncio.to_thread(
+                    clips.detect_clips, words, job.job_dir(),
+                    duration=job.duration, language=lang, force=True, focuses=focuses,
+                )
             n = len(result.get("clips") or [])
             job.update(message=f"{n} cortes encontrados" if n else "Nenhum corte encontrado")
         except Exception as e:
@@ -1291,7 +1382,7 @@ async def get_clip_words_route(job_id: str, clip_id: str,
         return {"words": override, "source": "override"}
     data = json.loads(job.words_path.read_text(encoding="utf-8"))
     global_words = data.get("words", [])
-    sliced = clips.slice_words(global_words, float(clip["start_s"]), float(clip["end_s"]))
+    sliced = clips.words_for_render(job.job_dir(), global_words, clip)
     return {"words": sliced, "source": "slice"}
 
 
@@ -1383,7 +1474,9 @@ async def _run_single_clip_render(job: Job, clip_id: str, opts: dict, lock_key: 
         clip = clips.get_clip(job.job_dir(), clip_id)
         if not clip:
             return
-        await asyncio.to_thread(_sync_render_one_clip, job, clip, opts)
+        job.update(message="Aguardando fila de renderização...")
+        async with _render_slots:
+            await asyncio.to_thread(_sync_render_one_clip, job, clip, opts)
     finally:
         _clip_render_running.discard(lock_key)
 
@@ -1428,7 +1521,8 @@ async def _run_clips_render(job: Job, body: ClipsRenderRequest, batch_key: str) 
                 overall = (_i + p) / total
                 job.update(Stage.RENDERING, overall, msg)
 
-            await asyncio.to_thread(_sync_render_one_clip, job, clip, opts, on_progress)
+            async with _render_slots:
+                await asyncio.to_thread(_sync_render_one_clip, job, clip, opts, on_progress)
 
         job.update(Stage.TRANSCRIBED, 1.0, f"{total} corte(s) prontos")
     except Exception as e:

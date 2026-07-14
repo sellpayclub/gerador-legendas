@@ -3,4 +3,10 @@ __pycache__
 *.pyc
 data/jobs
 .DS_Store
+
+# Secrets & runtime data (never commit)
 .env
+.env.*
+!.env.example
+!.env.hosted.example
+*.bak*

@@ -180,11 +180,18 @@ def delete_job(job_id: str) -> bool:
     """Remove a job from the store and delete its files on disk.
     Returns True if a directory or store entry was removed."""
     import shutil
-
     removed = _STORE.pop(job_id, None) is not None
     d = ROOT / job_id
     if d.exists() and d.is_dir():
-        shutil.rmtree(d, ignore_errors=True)
+        # Rename the directory first to prevent it from being rehydrated
+        # if rmtree fails to delete some files (e.g. held open by processes).
+        deleted_dir = d.with_name(d.name + f".deleted.{int(time.time())}")
+        try:
+            d.rename(deleted_dir)
+            shutil.rmtree(deleted_dir, ignore_errors=True)
+        except Exception:
+            # Fallback if rename fails
+            shutil.rmtree(d, ignore_errors=True)
         removed = True
     if is_multi_tenant():
         try:
@@ -206,6 +213,10 @@ def rehydrate_jobs() -> None:
         if not d.is_dir():
             continue
         job_id = d.name
+        # A failed best-effort removal may leave the renamed tombstone behind.
+        # Never expose or resume it as if it were a real job after a restart.
+        if ".deleted." in job_id:
+            continue
         if job_id in _STORE:
             continue
         inputs = sorted(d.glob("input.*"))

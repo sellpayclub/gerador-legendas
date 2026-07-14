@@ -240,6 +240,11 @@ export default function ConfiguracoesPage() {
                 )}
               </Panel>
               <Panel className="space-y-5">
+                {me.openai_key_status === "unreadable" && (
+                  <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
+                    A chave salva anteriormente não pode mais ser lida. Cole e salve a chave novamente.
+                  </div>
+                )}
                 <Field
                   label="API Key OpenAI"
                   hint={

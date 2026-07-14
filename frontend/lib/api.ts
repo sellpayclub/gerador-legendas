@@ -351,8 +351,12 @@ async function apiFetch(input: RequestInfo | URL, init?: RequestInit): Promise<R
     if (res.status === 402) {
       window.location.href = "/plano-inativo";
     } else if (res.status === 403) {
+      const payload = await res.clone().json().catch(() => null);
+      const code = payload?.detail?.code;
       const { isMultiTenant } = await import("@/lib/hosted");
-      if (isMultiTenant()) window.location.href = "/configuracoes";
+      if (isMultiTenant() && code === "openai_key_missing") {
+        window.location.href = "/configuracoes";
+      }
     }
   }
   return res;
@@ -370,6 +374,16 @@ async function jsonOrThrow<T>(res: Response): Promise<T> {
       throw new Error(
         "502: O servidor cortou a conexão (upload grande ou timeout). Tente de novo — se persistir, atualize a VPS.",
       );
+    }
+    try {
+      const payload = JSON.parse(text);
+      const detail = payload?.detail;
+      const message = typeof detail === "string" ? detail : detail?.message;
+      if (message) throw new Error(`${res.status}: ${message}`);
+    } catch (error) {
+      if (error instanceof Error && error.message.startsWith(`${res.status}:`)) {
+        throw error;
+      }
     }
     throw new Error(`${res.status}: ${text.slice(0, 200)}`);
   }
@@ -794,6 +808,7 @@ export type MeProfile = {
   email: string;
   access_active: boolean;
   openai_configured: boolean;
+  openai_key_status: "missing" | "unreadable" | "ready";
   multi_tenant: boolean;
   job_max_age_hours: number;
 };

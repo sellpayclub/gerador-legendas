@@ -95,7 +95,8 @@ export default function HomePage() {
       try {
         await deleteJob(jobId);
         setRecentJobs((jobs) => jobs.filter((j) => j.id !== jobId));
-      } catch {
+      } catch (err) {
+        alert("Erro no frontend ao apagar: " + String(err));
         await loadJobs();
       } finally {
         setDeletingId(null);
