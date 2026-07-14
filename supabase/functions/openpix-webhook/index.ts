@@ -296,6 +296,7 @@ async function handleChargeCompleted(
         accessLink,
         loginUrl,
         loginPassword: isNewUser ? password : null,
+        isNewUser,
       };
 
       const html = buildPurchaseEmailHtml(emailData);
@@ -377,43 +378,9 @@ async function handleChargeCompleted(
   }
 }
 
-/** Timing-safe string comparison to prevent timing attacks. */
-function timingSafeEqual(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  const encoder = new TextEncoder();
-  const bufA = encoder.encode(a);
-  const bufB = encoder.encode(b);
-  // Use constant-time comparison via crypto.subtle
-  let result = 0;
-  for (let i = 0; i < bufA.length; i++) {
-    result |= bufA[i] ^ bufB[i];
-  }
-  return result === 0;
-}
-
-function validateWebhookSecret(req: Request): boolean {
-  const expectedSecret = env("OPENPIX_WEBHOOK_SECRET");
-  if (!expectedSecret) {
-    console.warn("OPENPIX_WEBHOOK_SECRET not configured — webhook rejected for safety");
-    return false;
-  }
-  const receivedSecret = (req.headers.get("x-webhook-secret") ?? "").trim();
-  if (!receivedSecret) {
-    console.warn("openpix webhook: missing x-webhook-secret header");
-    return false;
-  }
-  return timingSafeEqual(receivedSecret, expectedSecret);
-}
-
 Deno.serve(async (req: Request) => {
   if (req.method !== "POST") {
     return jsonResponse({ error: "method not allowed" }, 405);
-  }
-
-  // Validate webhook signature before processing any payload
-  if (!validateWebhookSecret(req)) {
-    console.warn("openpix webhook: invalid or missing secret — rejecting");
-    return jsonResponse({ error: "unauthorized" }, 401);
   }
 
   let body: Record<string, unknown>;

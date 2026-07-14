@@ -4,6 +4,7 @@ from __future__ import annotations
 import html
 import logging
 import os
+import time
 from typing import Any, Optional
 
 log = logging.getLogger("legendas.pix_pending_email")
@@ -177,24 +178,33 @@ def send_pix_pending_email(
         "html": html_body,
     }
 
-    try:
-        import resend
+    import resend
 
-        resend.api_key = api_key
-        options = {"idempotency_key": f"pix-pending/{correlation_id}"}
-        result = resend.Emails.send(payload, options=options)
-        if isinstance(result, dict) and result.get("error"):
-            err = result["error"]
-            msg = err.get("message", str(err)) if isinstance(err, dict) else str(err)
-            log.error("Resend PIX email error for %s: %s", to_email, msg)
-            return {"ok": False, "error": msg}
-        email_id: Optional[str] = None
-        if isinstance(result, dict):
-            data = result.get("data") or result
-            if isinstance(data, dict):
-                email_id = data.get("id")
-        log.info("PIX pending email sent to %s (id=%s, correlation=%s)", to_email, email_id, correlation_id)
-        return {"ok": True, "email_id": email_id}
-    except Exception as exc:
-        log.exception("Failed to send PIX pending email to %s", to_email)
-        return {"ok": False, "error": str(exc)}
+    resend.api_key = api_key
+    options = {"idempotency_key": f"pix-pending/{correlation_id}"}
+    last_error = "erro desconhecido"
+    for attempt in range(3):
+        try:
+            result = resend.Emails.send(payload, options=options)
+            if isinstance(result, dict) and result.get("error"):
+                err = result["error"]
+                msg = err.get("message", str(err)) if isinstance(err, dict) else str(err)
+                log.error("Resend PIX email error for %s: %s", to_email, msg)
+                return {"ok": False, "error": msg}
+            email_id: Optional[str] = None
+            if isinstance(result, dict):
+                data = result.get("data") or result
+                if isinstance(data, dict):
+                    email_id = data.get("id")
+            log.info("PIX pending email sent to %s (id=%s, correlation=%s)", to_email, email_id, correlation_id)
+            return {"ok": True, "email_id": email_id}
+        except Exception as exc:
+            last_error = str(exc)
+            log.warning(
+                "PIX email attempt %d/3 failed for %s: %s",
+                attempt + 1, to_email, exc,
+            )
+            if attempt < 2:
+                time.sleep(0.8 * (attempt + 1))
+    log.error("Failed to send PIX pending email to %s after retries", to_email)
+    return {"ok": False, "error": last_error}

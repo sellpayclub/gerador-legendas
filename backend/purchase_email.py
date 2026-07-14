@@ -4,6 +4,7 @@ from __future__ import annotations
 import base64
 import logging
 import os
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -185,24 +186,33 @@ def send_purchase_approved_email(
     if attachments:
         payload["attachments"] = attachments
 
-    try:
-        import resend
+    import resend
 
-        resend.api_key = api_key
-        options = {"idempotency_key": f"purchase-approved/{order_id}"}
-        result = resend.Emails.send(payload, options=options)
-        if isinstance(result, dict) and result.get("error"):
-            err = result["error"]
-            msg = err.get("message", str(err)) if isinstance(err, dict) else str(err)
-            log.error("Resend error for %s: %s", to_email, msg)
-            return {"ok": False, "error": msg}
-        email_id = None
-        if isinstance(result, dict):
-            data = result.get("data") or result
-            if isinstance(data, dict):
-                email_id = data.get("id")
-        log.info("Purchase email sent to %s (id=%s)", to_email, email_id)
-        return {"ok": True, "email_id": email_id}
-    except Exception as exc:
-        log.exception("Failed to send purchase email to %s", to_email)
-        return {"ok": False, "error": str(exc)}
+    resend.api_key = api_key
+    options = {"idempotency_key": f"purchase-approved/{order_id}"}
+    last_error = "erro desconhecido"
+    for attempt in range(3):
+        try:
+            result = resend.Emails.send(payload, options=options)
+            if isinstance(result, dict) and result.get("error"):
+                err = result["error"]
+                msg = err.get("message", str(err)) if isinstance(err, dict) else str(err)
+                log.error("Resend error for %s: %s", to_email, msg)
+                return {"ok": False, "error": msg}
+            email_id = None
+            if isinstance(result, dict):
+                data = result.get("data") or result
+                if isinstance(data, dict):
+                    email_id = data.get("id")
+            log.info("Purchase email sent to %s (id=%s)", to_email, email_id)
+            return {"ok": True, "email_id": email_id}
+        except Exception as exc:
+            last_error = str(exc)
+            log.warning(
+                "Purchase email attempt %d/3 failed for %s: %s",
+                attempt + 1, to_email, exc,
+            )
+            if attempt < 2:
+                time.sleep(0.8 * (attempt + 1))
+    log.error("Failed to send purchase email to %s after retries", to_email)
+    return {"ok": False, "error": last_error}

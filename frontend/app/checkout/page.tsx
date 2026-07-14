@@ -970,11 +970,17 @@ export default function CheckoutPage() {
                     </p>
 
                     {/* QR Code */}
-                    <img
-                      src={pixData.qrCodeImage}
-                      alt="QR Code PIX"
-                      style={S.qrImage}
-                    />
+                    {pixData.qrCodeImage ? (
+                      <img
+                        src={pixData.qrCodeImage}
+                        alt="QR Code PIX"
+                        style={S.qrImage}
+                      />
+                    ) : (
+                      <div style={{ ...S.errorMsg, marginBottom: 16 }}>
+                        A imagem do QR não carregou. Use o PIX Copia e Cola abaixo.
+                      </div>
+                    )}
 
                     {/* Timer */}
                     <div style={S.timer}>
