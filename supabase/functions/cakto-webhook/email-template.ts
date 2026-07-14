@@ -7,8 +7,7 @@ export type PurchaseEmailData = {
   amount: string;
   paidAt: string;
   loginUrl: string;
-  loginPassword: string | null;
-  isNewUser?: boolean;
+  loginPassword: string;
   accessLink: string | null;
 };
 
@@ -38,12 +37,6 @@ export function buildPurchaseEmailHtml(data: PurchaseEmailData): string {
           <a href="${esc(data.accessLink)}" style="color:#facc15">Acesso rápido (link direto)</a>
         </p>`
     : "";
-  const passwordRow = data.loginPassword
-    ? row("Senha", data.loginPassword)
-    : row("Senha", "Use sua senha atual ou clique em Esqueci minha senha");
-  const passwordHelp = data.loginPassword
-    ? "Guarde esta senha. Você pode trocá-la depois em <strong>Configurações → Conta e senha</strong>."
-    : "Sua senha não foi alterada. Se não lembrar, use <strong>Esqueci minha senha</strong> na tela de login.";
 
   return `<!DOCTYPE html>
 <html lang="pt-BR">
@@ -70,7 +63,7 @@ export function buildPurchaseEmailHtml(data: PurchaseEmailData): string {
         </p>
         <table style="width:100%;border-collapse:collapse">
           ${row("Login (e-mail)", data.customerEmail)}
-          ${passwordRow}
+          ${row("Senha", data.loginPassword)}
           ${row("Entrar em", data.loginUrl)}
         </table>
         <p style="margin:20px 0 0">
@@ -82,7 +75,7 @@ export function buildPurchaseEmailHtml(data: PurchaseEmailData): string {
         </p>
         ${quickAccessBlock}
         <p style="margin:16px 0 0;font-size:12px;color:#86efac;line-height:1.5">
-          ${passwordHelp}
+          Guarde esta senha. Você pode trocá-la depois em <strong>Configurações → Conta e senha</strong>.
         </p>
       </div>
 
@@ -104,7 +97,7 @@ export function buildPurchaseEmailHtml(data: PurchaseEmailData): string {
       <div style="background:#27272a;border-radius:12px;padding:20px;margin:28px 0;border:1px solid #3f3f46">
         <p style="margin:0 0 12px;font-size:15px;font-weight:600;color:#fafafa">Como começar</p>
         <ol style="margin:0;padding-left:20px;color:#d4d4d8;line-height:1.8;font-size:14px">
-          <li>Acesse <strong>${esc(data.loginUrl)}</strong> pelo link direto ou com seus dados acima</li>
+          <li>Acesse <strong>${esc(data.loginUrl)}</strong> com o e-mail e senha acima</li>
           <li>Vá em <strong>Configurações</strong> e cadastre sua chave OpenAI</li>
           <li>Envie seu vídeo e gere legendas ou cortes virais</li>
         </ol>
