@@ -3,9 +3,6 @@
 import { useEffect, useState } from "react";
 import { trackPurchaseWhenReady } from "@/lib/checkoutTracking";
 
-const LOGO_URL =
-  "https://lcbczyzedluaoxtuajoz.supabase.co/storage/v1/object/public/imagens/lgooclipsaas%20color.png";
-
 async function fulfillAccess(transactionId: string): Promise<boolean> {
   for (let attempt = 0; attempt < 8; attempt++) {
     try {
@@ -106,13 +103,23 @@ export default function ConfirmacaoPage() {
           zIndex: 1,
         }}
       >
-        {/* Logo */}
-        <img
-          src={LOGO_URL}
-          alt="ClipSaaS"
-          style={{ height: 36, marginBottom: 32, objectFit: "contain" }}
-          draggable={false}
-        />
+        {/* Local wordmark: avoids consuming Supabase Storage egress. */}
+        <div
+          aria-label="ClipSaaS"
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 8,
+            marginBottom: 32,
+            color: "#18181b",
+            fontSize: 24,
+            fontWeight: 800,
+            letterSpacing: "-0.04em",
+          }}
+        >
+          <span style={{ color: "#22c55e" }}>▶</span>
+          ClipSaaS
+        </div>
 
         {/* Animated Checkmark */}
         <div
