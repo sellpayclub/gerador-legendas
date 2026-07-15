@@ -1,6 +1,7 @@
 """Hosted mode API routes (/api/me, Cakto webhook)."""
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from collections import defaultdict
@@ -183,6 +184,29 @@ def _get_checkout_order(correlation_id: str) -> dict | None:
     return rows[0] if rows else None
 
 
+def _ensure_checkout_storage_available() -> None:
+    """Fail before creating a PIX when paid-order storage is unavailable.
+
+    Creating the charge first can leave a customer with a payable PIX that the
+    application cannot fulfill. Keep this probe intentionally tiny.
+    """
+    try:
+        rest_get(
+            "orders",
+            params={"select": "correlation_id", "limit": "1"},
+        )
+    except Exception as exc:
+        message = str(exc)
+        if "exceed_cached_egress_quota" in message:
+            log.error("Checkout blocked: Supabase cached egress quota exceeded")
+        else:
+            log.exception("Checkout blocked: order storage unavailable")
+        raise HTTPException(
+            503,
+            "Pagamento temporariamente indisponível. Nenhuma cobrança foi criada; tente novamente mais tarde.",
+        ) from exc
+
+
 def _fulfill_if_paid(correlation_id: str, *, source: str) -> dict | None:
     try:
         return fulfill_openpix_order(correlation_id, source=source)
@@ -249,6 +273,11 @@ async def create_checkout_charge(
             "Total inválido. Recarregue a página e tente novamente.",
         )
 
+    # Verify that an order can be persisted before asking OpenPix to create a
+    # payable charge. This prevents orphan PIX charges during database outages
+    # or account quota restrictions.
+    await asyncio.to_thread(_ensure_checkout_storage_available)
+
     correlation_id = generate_correlation_id()
 
     # Clean CPF — remove dots and dashes
@@ -258,8 +287,6 @@ async def create_checkout_charge(
     phone_clean = "".join(c for c in body.whatsapp if c.isdigit())
     if not phone_clean.startswith("55"):
         phone_clean = f"55{phone_clean}"
-
-    import asyncio
 
     # Create charge on OpenPix
     charge_result = await asyncio.to_thread(
