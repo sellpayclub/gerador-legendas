@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import base64
 import logging
 import os
 import time
@@ -24,6 +25,23 @@ def _headers() -> dict[str, str]:
         "Authorization": _app_id(),
         "Content-Type": "application/json",
     }
+
+
+def _inline_qr_image(url: str) -> str:
+    """Embed the provider QR image so browsers do not depend on a second host."""
+    if not url.startswith(("https://api.woovi.com/", "https://api.openpix.com.br/")):
+        return url
+    try:
+        image = requests.get(url, timeout=3)
+        image.raise_for_status()
+        content_type = image.headers.get("content-type", "image/png").split(";", 1)[0]
+        if not content_type.startswith("image/") or len(image.content) > 512_000:
+            return url
+        encoded = base64.b64encode(image.content).decode("ascii")
+        return f"data:{content_type};base64,{encoded}"
+    except requests.RequestException as exc:
+        log.warning("OpenPix QR image embed failed: %s", exc)
+        return url
 
 
 def create_pix_charge(
@@ -68,7 +86,7 @@ def create_pix_charge(
         return {
             "ok": True,
             "correlationID": charge.get("correlationID", correlation_id),
-            "qrCodeImage": charge.get("qrCodeImage", ""),
+            "qrCodeImage": _inline_qr_image(str(charge.get("qrCodeImage", ""))),
             "brCode": charge.get("brCode", ""),
             "paymentLinkUrl": charge.get("paymentLinkUrl", ""),
             "charge_id": charge.get("globalID", ""),
