@@ -1,6 +1,5 @@
 import type { Metadata } from "next";
 import "./globals.css";
-import { CLIPSAAS_LOGO_URL } from "@/lib/brand";
 import Providers from "@/components/Providers";
 
 const isHosted = process.env.NEXT_PUBLIC_MULTI_TENANT === "true";
@@ -10,7 +9,6 @@ export const metadata: Metadata = {
   description: isHosted
     ? "Gere legendas e cortes virais com IA"
     : "Legendas automaticas estilo CapCut - uso pessoal",
-  icons: isHosted ? { icon: CLIPSAAS_LOGO_URL, apple: CLIPSAAS_LOGO_URL } : undefined,
 };
 
 export default function RootLayout({

@@ -1,6 +1,4 @@
-import Image from "next/image";
 import Link from "next/link";
-import { CLIPSAAS_LOGO_URL } from "@/lib/brand";
 
 type Props = {
   size?: "sm" | "md" | "lg";
@@ -24,15 +22,14 @@ export default function ClipSaasLogo({
   const height = heights[size];
   const inner = (
     <div className={`flex flex-col items-center gap-2 ${className}`}>
-      <Image
-        src={CLIPSAAS_LOGO_URL}
-        alt="ClipSaaS"
-        width={Math.round(height * 3.5)}
-        height={height}
-        className="h-auto w-auto object-contain"
-        style={{ maxHeight: height }}
-        priority={size === "lg"}
-      />
+      <div
+        aria-label="ClipSaaS"
+        className="flex items-center font-extrabold tracking-tight text-zinc-100"
+        style={{ fontSize: Math.round(height * 0.62), lineHeight: `${height}px` }}
+      >
+        <span className="mr-2 text-green-500">▶</span>
+        ClipSaaS
+      </div>
       {showTagline && (
         <span className="text-xs uppercase tracking-widest text-muted">
           Gerador de Legendas
