@@ -17,17 +17,6 @@ const MAIN_PRODUCT = {
   description: "Acesso vitalício à plataforma e uso ilimitado",
 };
 
-const INCLUDED_BONUSES = [
-  {
-    title: "Masterclass: Como estruturar uma Agência de Cortes Virais",
-    image: "/bonus/masterclass-agencia-cortes.png",
-  },
-  {
-    title: "Guia completo: Como ganhar dinheiro com Cortes Virais",
-    image: "/bonus/guia-cortes-virais.png",
-  },
-];
-
 const ORDER_BUMPS = [
   {
     id: "bump-whatsapp",
@@ -701,26 +690,6 @@ export default function CheckoutPage() {
             <div style={{ fontSize: 20, fontWeight: 800, color: "#22c55e" }}>
               {formatBRL(MAIN_PRODUCT.price_cents)}
             </div>
-          </div>
-        </div>
-
-        <div style={{ background: "#f0fdf4", border: "1px solid #86efac", borderRadius: 12, padding: "14px 16px", marginTop: -12, marginBottom: 24 }}>
-          <div style={{ color: "#166534", fontSize: 13, fontWeight: 800, marginBottom: 7, textTransform: "uppercase", letterSpacing: "0.03em" }}>
-            🎁 Bônus inclusos
-          </div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 10 }}>
-            {INCLUDED_BONUSES.map((bonus) => (
-              <div key={bonus.title} style={{ minWidth: 0, textAlign: "center" }}>
-                <img
-                  src={bonus.image}
-                  alt={bonus.title}
-                  style={{ width: "100%", height: 290, objectFit: "contain", display: "block", borderRadius: 8 }}
-                />
-                <div style={{ color: "#166534", fontSize: 12, fontWeight: 700, lineHeight: 1.35, marginTop: 6 }}>
-                  {bonus.title}
-                </div>
-              </div>
-            ))}
           </div>
         </div>
 
