@@ -51,10 +51,9 @@ def _rate_limit(key: str, max_requests: int, request: Request) -> None:
 #  Server-side price catalog — NEVER trust the frontend price
 # ---------------------------------------------------------------------------
 _PRICE_CATALOG: dict[str, int] = {
-    "clipsaas-main": 3700,    # R$ 37,00 (ClipSaaS — Gerador de Legendas)
+    "clipsaas-main": 9700,    # R$ 97,00 (ClipSaaS — Gerador de Legendas)
     "bump-whatsapp": 990,     # R$ 9,90 (Suporte WhatsApp)
     "bump-updates": 1990,     # R$ 19,90 (Atualizações Futuras)
-    "bump-guide": 2990,       # R$ 29,90 (Guia Digital)
 }
 
 router = APIRouter()

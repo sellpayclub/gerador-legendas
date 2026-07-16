@@ -12,8 +12,21 @@ const LOGO_URL =
 const MAIN_PRODUCT = {
   id: "clipsaas-main",
   name: "ClipSaaS — Gerador de Legendas",
-  price_cents: 3700,
+  price_cents: 9700,
+  regular_price_cents: 14700,
+  description: "Acesso vitalício à plataforma e uso ilimitado",
 };
+
+const INCLUDED_BONUSES = [
+  {
+    title: "Masterclass: Como estruturar uma Agência de Cortes Virais",
+    image: "/bonus/masterclass-agencia-cortes.png",
+  },
+  {
+    title: "Guia completo: Como ganhar dinheiro com Cortes Virais",
+    image: "/bonus/guia-cortes-virais.png",
+  },
+];
 
 const ORDER_BUMPS = [
   {
@@ -31,14 +44,6 @@ const ORDER_BUMPS = [
     description:
       "Receba todas as atualizações e novas funcionalidades da ferramenta",
     price_cents: 1990,
-  },
-  {
-    id: "bump-guide",
-    emoji: "📚",
-    name: "Guia Digital: Como Ganhar Dinheiro com Cortes Virais",
-    description:
-      "Aprenda estratégias comprovadas para monetizar com cortes virais nas redes sociais",
-    price_cents: 2990,
   },
 ];
 
@@ -685,9 +690,37 @@ export default function CheckoutPage() {
             <div style={{ fontSize: 15, fontWeight: 700, color: "#18181b" }}>
               {MAIN_PRODUCT.name}
             </div>
+            <div style={{ marginTop: 4, fontSize: 12, color: "#52525b", lineHeight: 1.4 }}>
+              {MAIN_PRODUCT.description}
+            </div>
           </div>
-          <div style={{ fontSize: 20, fontWeight: 800, color: "#22c55e", whiteSpace: "nowrap" }}>
-            {formatBRL(MAIN_PRODUCT.price_cents)}
+          <div style={{ textAlign: "right", whiteSpace: "nowrap" }}>
+            <div style={{ fontSize: 12, color: "#71717a", textDecoration: "line-through", marginBottom: 2 }}>
+              {formatBRL(MAIN_PRODUCT.regular_price_cents)}
+            </div>
+            <div style={{ fontSize: 20, fontWeight: 800, color: "#22c55e" }}>
+              {formatBRL(MAIN_PRODUCT.price_cents)}
+            </div>
+          </div>
+        </div>
+
+        <div style={{ background: "#f0fdf4", border: "1px solid #86efac", borderRadius: 12, padding: "14px 16px", marginTop: -12, marginBottom: 24 }}>
+          <div style={{ color: "#166534", fontSize: 13, fontWeight: 800, marginBottom: 7, textTransform: "uppercase", letterSpacing: "0.03em" }}>
+            🎁 Bônus inclusos
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 10 }}>
+            {INCLUDED_BONUSES.map((bonus) => (
+              <div key={bonus.title} style={{ minWidth: 0, textAlign: "center" }}>
+                <img
+                  src={bonus.image}
+                  alt={bonus.title}
+                  style={{ width: "100%", height: 290, objectFit: "contain", display: "block", borderRadius: 8 }}
+                />
+                <div style={{ color: "#166534", fontSize: 12, fontWeight: 700, lineHeight: 1.35, marginTop: 6 }}>
+                  {bonus.title}
+                </div>
+              </div>
+            ))}
           </div>
         </div>
 
@@ -984,12 +1017,15 @@ export default function CheckoutPage() {
 
                     {/* Timer */}
                     <div style={S.timer}>
-                      <div>Pague em até</div>
+                      <div>Garanta seu PIX no valor promocional em até</div>
                       <div style={S.timerValue}>
                         {timerMinutes}:{timerSeconds}
                       </div>
                       <div style={S.progressBar}>
                         <div style={S.progressFill(timerPct)} />
+                      </div>
+                      <div style={{ fontSize: 12, color: "#71717a" }}>
+                        Oferta atual: {formatBRL(MAIN_PRODUCT.price_cents)}. Preço normal: {formatBRL(MAIN_PRODUCT.regular_price_cents)}.
                       </div>
                     </div>
 

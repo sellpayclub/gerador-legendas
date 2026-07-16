@@ -68,10 +68,9 @@ Após pagamento confirmado (PIX), o cliente recebe um **e-mail** com:
 
 | Item | Valor |
 |------|-------|
-| **ClipSaaS — Gerador de Legendas** (produto principal) | R$ 37,00 |
+| **ClipSaaS — Gerador de Legendas** (produto principal) | R$ 97,00 |
 | Order bump: Suporte WhatsApp | R$ 9,90 |
 | Order bump: Atualizações Futuras | R$ 19,90 |
-| Order bump: Guia Digital (Como Ganhar Dinheiro com Cortes Virais) | R$ 29,90 |
 
 Pagamento via **PIX** no checkout: **https://app.clipsaas.site/checkout**
 
