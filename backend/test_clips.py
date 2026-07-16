@@ -1,9 +1,31 @@
 import unittest
+from unittest.mock import patch
 
 import clips
+from request_context import get_current_user_id, user_api_context
 
 
 class LongVideoClipTests(unittest.TestCase):
+    def test_parallel_long_video_blocks_keep_owner_api_context(self) -> None:
+        """Long-video workers must retain the logged-in owner's BYOK key."""
+        seen_user_ids: list[str | None] = []
+
+        def fake_openai(*_args: object, **_kwargs: object) -> dict:
+            seen_user_ids.append(get_current_user_id())
+            return {"candidates": []}
+
+        words = [{"w": "teste", "start": 0.0, "end": 1.0}] * 2
+        with (
+            patch.object(clips, "SINGLE_PASS_WORDS", 1),
+            patch.object(clips, "_transcript_blocks", return_value=["bloco 1", "bloco 2"]),
+            patch.object(clips, "_openai_json", side_effect=fake_openai),
+            user_api_context("user-123"),
+        ):
+            clips._call_gpt_clips(words, duration=60, language="pt")
+
+        self.assertGreaterEqual(len(seen_user_ids), 2)
+        self.assertEqual(set(seen_user_ids), {"user-123"})
+
     def test_target_never_exceeds_output_limit(self) -> None:
         self.assertEqual(clips._clip_target_count(60 * 60), clips.MAX_CLIPS)
         self.assertEqual(clips._clip_target_count(2 * 60 * 60), clips.MAX_CLIPS)

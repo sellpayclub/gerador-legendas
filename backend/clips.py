@@ -13,6 +13,7 @@ from dotenv import load_dotenv
 from timing import gap_after
 from openai_chat import chat_json, completion_token_budget, uses_max_completion_tokens
 from app_settings import get_clips_model
+from request_context import get_current_user_id, user_api_context
 
 load_dotenv()
 
@@ -680,10 +681,16 @@ def _call_gpt_clips(
         sum_system = _summarize_block_system(lang_hint, focuses)
         import concurrent.futures
 
+        # ContextVars are not inherited by ThreadPoolExecutor workers.  Without
+        # restoring the owner here, long transcripts (which use this parallel
+        # block path) lose their BYOK OpenAI key and falsely report it missing.
+        user_id = get_current_user_id()
+
         def _process_block(args: tuple[int, str]) -> dict:
             i, block_text = args
             print(f"[clips] Analisando bloco {i}/{len(blocks)}...", flush=True)
-            return _openai_json(sum_system, block_text, max_tokens=2500, model=model)
+            with user_api_context(user_id):
+                return _openai_json(sum_system, block_text, max_tokens=2500, model=model)
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
             for data in executor.map(_process_block, enumerate(blocks, 1)):
