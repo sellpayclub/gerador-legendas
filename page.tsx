@@ -6,8 +6,7 @@ import { trackInitiateCheckout, trackPurchase } from "@/lib/checkoutTracking";
 
 /* ─── Constants ─────────────────────────────────────────── */
 
-const LOGO_URL =
-  "https://s3.talitapaixao.com/typebot/public/workspaces/cmr6myovi00001dnqy3r2x68x/typebots/cmrbdsbgy00051dnqxuoll93l/blocks/jg1lo0122z7g4l6ort43kbqz?v=1783473154163";
+const LOGO_URL = "/brand/logo-clipsaas.png";
 
 const MAIN_PRODUCT = {
   id: "clipsaas-main",

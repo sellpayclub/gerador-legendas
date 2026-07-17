@@ -3,8 +3,7 @@
 import { useEffect, useState } from "react";
 import { trackPurchaseWhenReady } from "@/lib/checkoutTracking";
 
-const LOGO_URL =
-  "https://lcbczyzedluaoxtuajoz.supabase.co/storage/v1/object/public/imagens/lgooclipsaas%20color.png";
+const LOGO_URL = "/brand/logo-clipsaas.png";
 
 async function fulfillAccess(transactionId: string): Promise<boolean> {
   for (let attempt = 0; attempt < 8; attempt++) {
