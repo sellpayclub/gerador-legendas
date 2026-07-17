@@ -6,7 +6,7 @@ import { trackInitiateCheckout, trackPurchase } from "@/lib/checkoutTracking";
 
 /* ─── Constants ─────────────────────────────────────────── */
 
-const LOGO_URL = "/brand/logo-clipsaas.png";
+const LOGO_URL = "/brand/logo-checkout.png";
 
 const MAIN_PRODUCT = {
   id: "clipsaas-main",
