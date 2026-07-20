@@ -168,7 +168,6 @@ export default function AdminPage() {
                 <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-5">
                   <p className="text-sm font-medium text-zinc-200">ARR estimado</p>
                   <p className="mt-2 text-3xl font-bold text-violet-300">{brl(sales.annualized_revenue_cents)}</p>
-                  <p className="mt-3 text-xs leading-5 text-zinc-500">Como o acesso é vitalício, este valor é uma projeção anual baseada no faturamento do mês atual — não uma cobrança recorrente contratada.</p>
                 </div>
                 <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-5">
                   <div className="mb-5 flex items-center justify-between"><p className="text-sm font-medium text-zinc-200">Faturamento dos últimos 6 meses</p><span className="text-xs text-zinc-500">R$</span></div>
