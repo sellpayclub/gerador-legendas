@@ -35,6 +35,15 @@ def is_anonymous_payload(payload: dict[str, Any]) -> bool:
     )
 
 
+def is_mobile_profile(profile: dict[str, Any]) -> bool:
+    """Works before and after the optional mobile schema migration is applied."""
+    return bool(profile.get("mobile_access")) or str(profile.get("plan_name") or "").startswith("viralclips_")
+
+
+def is_mobile_premium_profile(profile: dict[str, Any]) -> bool:
+    return bool(profile.get("mobile_premium")) or str(profile.get("plan_name") or "") == "viralclips_pro"
+
+
 def _auth_api_key() -> str:
     key = (os.environ.get("SUPABASE_ANON_KEY") or "").strip()
     if not key:
@@ -113,8 +122,8 @@ async def get_current_user(
         email=str(profile.get("email") or payload.get("email") or ""),
         access_active=bool(profile.get("access_active")),
         is_anonymous=is_anonymous_payload(payload),
-        mobile_access=bool(profile.get("mobile_access")),
-        mobile_premium=bool(profile.get("mobile_premium")),
+        mobile_access=is_mobile_profile(profile),
+        mobile_premium=is_mobile_premium_profile(profile),
     )
 
 

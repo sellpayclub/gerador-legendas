@@ -6,7 +6,7 @@ from typing import Optional
 from fastapi import Depends, Header, HTTPException, Query
 
 import jobs
-from auth import UserContext, decode_bearer_token, get_current_user, is_anonymous_payload, require_active_user, require_user
+from auth import UserContext, decode_bearer_token, get_current_user, is_anonymous_payload, is_mobile_profile, is_mobile_premium_profile, require_active_user, require_user
 from db_jobs import job_owned_by
 from jobs import Job
 from tenant import is_multi_tenant
@@ -119,8 +119,8 @@ async def _user_from_token(authorization: Optional[str], access_token: Optional[
         email=str(profile.get("email") or payload.get("email") or ""),
         access_active=bool(profile.get("access_active")),
         is_anonymous=is_anonymous_payload(payload),
-        mobile_access=bool(profile.get("mobile_access")),
-        mobile_premium=bool(profile.get("mobile_premium")),
+        mobile_access=is_mobile_profile(profile),
+        mobile_premium=is_mobile_premium_profile(profile),
     )
 
 

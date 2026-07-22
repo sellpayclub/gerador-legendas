@@ -60,7 +60,9 @@ async def start_mobile_session(
         raise HTTPException(503, "O processamento móvel está temporariamente indisponível.")
     rest_upsert(
         "profiles",
-        {"id": u.user_id, "mobile_access": True},
+        # plan_name already exists in production. It keeps the mobile flow
+        # deployable independently of the optional schema migration.
+        {"id": u.user_id, "plan_name": "viralclips_pro" if u.mobile_premium else "viralclips_free"},
         on_conflict="id",
     )
     return {"ok": True, "premium": bool(u.mobile_premium)}
@@ -83,8 +85,7 @@ async def sync_mobile_entitlement(
         "profiles",
         params={"id": f"eq.{u.user_id}"},
         body={
-            "mobile_premium": premium,
-            "mobile_entitlement_updated_at": datetime.now(timezone.utc).isoformat(),
+            "plan_name": "viralclips_pro" if premium else "viralclips_free",
         },
     )
     return {"ok": True, "premium": premium}

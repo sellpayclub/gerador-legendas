@@ -251,7 +251,7 @@ def get_openai_api_key() -> str:
                 "OpenAI não configurada. Faça login e adicione sua API key em Configurações."
             )
         profile = _load_profile(uid)
-        if profile.get("mobile_access"):
+        if profile.get("mobile_access") or str(profile.get("plan_name") or "").startswith("viralclips_"):
             key = os.environ.get("MOBILE_OPENAI_API_KEY", "").strip()
             if not mobile_openai_ready():
                 raise RuntimeError("Processamento móvel temporariamente indisponível.")
