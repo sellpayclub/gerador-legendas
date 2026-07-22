@@ -20,6 +20,19 @@ class UserContext:
     user_id: str
     email: str
     access_active: bool
+    # Anonymous Supabase accounts back the mobile app without showing a login.
+    # They are deliberately distinct from regular inactive web accounts.
+    is_anonymous: bool = False
+    mobile_access: bool = False
+    mobile_premium: bool = False
+
+
+def is_anonymous_payload(payload: dict[str, Any]) -> bool:
+    app_metadata = payload.get("app_metadata")
+    return bool(
+        payload.get("is_anonymous")
+        or (isinstance(app_metadata, dict) and app_metadata.get("provider") == "anonymous")
+    )
 
 
 def _auth_api_key() -> str:
@@ -49,7 +62,11 @@ def _verify_token_via_auth_api(token: str) -> dict[str, Any]:
     uid = user.get("id")
     if not uid:
         raise HTTPException(401, "Token inválido.")
-    return {"sub": str(uid), "email": user.get("email")}
+    return {
+        "sub": str(uid),
+        "email": user.get("email"),
+        "is_anonymous": bool(user.get("is_anonymous")),
+    }
 
 
 def decode_bearer_token(token: str) -> dict[str, Any]:
@@ -95,6 +112,9 @@ async def get_current_user(
         user_id=str(sub),
         email=str(profile.get("email") or payload.get("email") or ""),
         access_active=bool(profile.get("access_active")),
+        is_anonymous=is_anonymous_payload(payload),
+        mobile_access=bool(profile.get("mobile_access")),
+        mobile_premium=bool(profile.get("mobile_premium")),
     )
 
 

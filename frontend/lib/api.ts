@@ -371,7 +371,15 @@ async function apiFetch(input: RequestInfo | URL, init?: RequestInit): Promise<R
   const res = await fetch(input, { ...init, headers });
   if (typeof window !== "undefined") {
     if (res.status === 402) {
-      window.location.href = "/plano-inativo";
+      const payload = await res.clone().json().catch(() => null);
+      const mobileBridge = (window as Window & {
+        ReactNativeWebView?: { postMessage(message: string): void };
+      }).ReactNativeWebView;
+      if (payload?.detail?.code === "mobile_export_required" && mobileBridge) {
+        mobileBridge.postMessage(JSON.stringify({ type: "mobile_export_required" }));
+      } else {
+        window.location.href = "/plano-inativo";
+      }
     } else if (res.status === 403) {
       const payload = await res.clone().json().catch(() => null);
       const code = payload?.detail?.code;

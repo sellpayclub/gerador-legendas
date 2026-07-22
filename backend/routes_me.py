@@ -100,12 +100,15 @@ class CaktoWebhookBody(BaseModel):
 async def get_me(user: UserContext = Depends(get_current_user)) -> dict:
     u = await require_user(user)
     key_state = get_user_openai_key_status(u.user_id)
+    mobile_ready = bool(u.mobile_access)
     return {
         "user_id": u.user_id,
         "email": u.email,
-        "access_active": u.access_active,
-        "openai_configured": bool(key_state["configured"]),
-        "openai_key_status": key_state["status"],
+        "access_active": u.access_active or mobile_ready,
+        "openai_configured": mobile_ready or bool(key_state["configured"]),
+        "openai_key_status": "ready" if mobile_ready else key_state["status"],
+        "mobile_access": mobile_ready,
+        "mobile_premium": bool(u.mobile_premium),
         "multi_tenant": is_multi_tenant(),
         "job_max_age_hours": __import__("tenant").job_max_age_hours(),
     }

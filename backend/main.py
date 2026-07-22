@@ -32,11 +32,15 @@ from overlays import ComposeExtras, InstagramHeader
 import app_settings
 from media import ffmpeg_ok
 from auth import UserContext
-from deps import mt_active_user, mt_active_user_media, mt_openai_user, resolve_job
+from deps import (
+    mt_active_user, mt_active_user_media, mt_openai_user, resolve_job,
+    mt_export_user, mt_export_user_media,
+)
 from request_context import set_current_user_id, user_api_context
 from tenant import is_multi_tenant
 from routes_me import router as hosted_router
 from routes_admin import router as admin_router
+from mobile_access import router as mobile_router
 
 log = logging.getLogger("legendas.main")
 
@@ -121,6 +125,7 @@ def _recover_stale_render_state(job: Job) -> None:
 app = FastAPI(title="Legendas Locais")
 app.include_router(hosted_router)
 app.include_router(admin_router)
+app.include_router(mobile_router)
 
 @app.middleware("http")
 async def _inject_user_context(request, call_next):
@@ -1124,7 +1129,7 @@ async def update_words(job_id: str, body: WordsUpdate,
 
 @app.post("/api/jobs/{job_id}/render")
 async def render_job(job_id: str, body: RenderRequest, request: Request,
-    user: Optional[UserContext] = Depends(mt_openai_user)) -> dict:
+    user: Optional[UserContext] = Depends(mt_export_user)) -> dict:
     _rate_limit_request("render", 10, request, user.user_id if user else None)
     job = resolve_job(job_id, user)
     if not job.words_path or not job.words_path.exists():
@@ -1241,7 +1246,7 @@ async def _run_render(job: Job, body: RenderRequest) -> None:
 
 @app.get("/api/jobs/{job_id}/output.mp4")
 async def download_output(job_id: str,
-    user: Optional[UserContext] = Depends(mt_active_user_media)) -> FileResponse:
+    user: Optional[UserContext] = Depends(mt_export_user_media)) -> FileResponse:
     job = resolve_job(job_id, user)
     if not job.output_path or not job.output_path.exists():
         raise HTTPException(404, "output not ready")
@@ -1449,7 +1454,7 @@ async def save_clip_keywords_route(
 @app.post("/api/jobs/{job_id}/clips/{clip_id}/render")
 async def render_single_clip_route(
     job_id: str, clip_id: str, body: SingleClipRenderRequest,
-    user: Optional[UserContext] = Depends(mt_openai_user)) -> dict:
+    user: Optional[UserContext] = Depends(mt_export_user)) -> dict:
     job = resolve_job(job_id, user)
     if not job.words_path or not job.words_path.exists():
         raise HTTPException(400, "transcribe first")
@@ -1483,7 +1488,7 @@ async def _run_single_clip_render(job: Job, clip_id: str, opts: dict, lock_key: 
 
 @app.post("/api/jobs/{job_id}/clips/render")
 async def render_clips_route(job_id: str, body: ClipsRenderRequest,
-    user: Optional[UserContext] = Depends(mt_openai_user)) -> dict:
+    user: Optional[UserContext] = Depends(mt_export_user)) -> dict:
     job = resolve_job(job_id, user)
     if not job.words_path or not job.words_path.exists():
         raise HTTPException(400, "transcribe first")
@@ -1533,7 +1538,7 @@ async def _run_clips_render(job: Job, body: ClipsRenderRequest, batch_key: str) 
 
 @app.get("/api/jobs/{job_id}/clips/{clip_id}/output")
 async def download_clip_output(job_id: str, clip_id: str,
-    user: Optional[UserContext] = Depends(mt_active_user_media)) -> FileResponse:
+    user: Optional[UserContext] = Depends(mt_export_user_media)) -> FileResponse:
     job = resolve_job(job_id, user)
     safe_id = Path(clip_id).name
     out = clips.clip_output_path(job.job_dir(), safe_id)

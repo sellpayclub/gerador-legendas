@@ -1,0 +1,26 @@
+{
+  "expo": {
+    "name": "ViralClips",
+    "slug": "viralclips",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "package": "com.clipsaas.viralclip",
+      "permissions": ["com.android.vending.BILLING"],
+      "adaptiveIcon": {
+        "backgroundColor": "#03080D",
+        "foregroundImage": "./assets/icon.png"
+      },
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": ["./plugins/withRevenueCat.js", "expo-secure-store"]
+  }
+}

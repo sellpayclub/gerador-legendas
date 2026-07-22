@@ -242,13 +242,21 @@ def get_openai_api_key() -> str:
     if is_multi_tenant():
         from request_context import get_current_user_id
         from user_secrets import get_user_openai_key
+        from mobile_access import mobile_openai_ready
+        from auth import _load_profile
 
         uid = get_current_user_id()
         if not uid:
             raise RuntimeError(
                 "OpenAI não configurada. Faça login e adicione sua API key em Configurações."
             )
-        key = get_user_openai_key(uid)
+        profile = _load_profile(uid)
+        if profile.get("mobile_access"):
+            key = os.environ.get("MOBILE_OPENAI_API_KEY", "").strip()
+            if not mobile_openai_ready():
+                raise RuntimeError("Processamento móvel temporariamente indisponível.")
+        else:
+            key = get_user_openai_key(uid)
         if not key:
             raise RuntimeError(
                 "OpenAI não configurada. Abra Configurações e adicione sua API key."
