@@ -30,6 +30,11 @@ class CheckoutStorageGuardTests(unittest.TestCase):
                 routes_me._ensure_no_recent_checkout("buyer@example.com")
         self.assertEqual(caught.exception.status_code, 429)
 
+    def test_cpf_checksum(self) -> None:
+        self.assertTrue(routes_me._valid_cpf("529.982.247-25"))
+        self.assertFalse(routes_me._valid_cpf("000.000.000-00"))
+        self.assertFalse(routes_me._valid_cpf("529.982.247-24"))
+
 
 if __name__ == "__main__":
     unittest.main()

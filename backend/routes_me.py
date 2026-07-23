@@ -5,6 +5,7 @@ import asyncio
 import hmac
 import logging
 import os
+import re
 import time
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
@@ -34,6 +35,10 @@ _rate_buckets: dict[str, list[float]] = defaultdict(list)
 _RATE_WINDOW_S = 600  # ten-minute anti-abuse window
 _RATE_MAX_CHECKOUT = 3  # max three billable charge attempts per IP / 10 min
 _RATE_MAX_STATUS = 220  # checkout polls every three seconds for five minutes
+_RATE_MAX_CHECKOUT_GLOBAL = max(
+    1, int(os.environ.get("CHECKOUT_GLOBAL_MAX_CHARGES", "30"))
+)
+_EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
 
 
 def _rate_limit(key: str, max_requests: int, request: Request) -> None:
@@ -49,6 +54,49 @@ def _rate_limit(key: str, max_requests: int, request: Request) -> None:
     if len(_rate_buckets[bucket_key]) >= max_requests:
         raise HTTPException(429, "Muitas requisições. Aguarde um momento.")
     _rate_buckets[bucket_key].append(now)
+
+
+def _global_checkout_rate_limit() -> None:
+    """Emergency circuit breaker against distributed charge-generation bots."""
+    now = time.monotonic()
+    key = "create-charge:global"
+    _rate_buckets[key] = [t for t in _rate_buckets[key] if now - t < _RATE_WINDOW_S]
+    if len(_rate_buckets[key]) >= _RATE_MAX_CHECKOUT_GLOBAL:
+        log.warning("Checkout global circuit breaker reached")
+        raise HTTPException(
+            429,
+            "Muitas tentativas de pagamento. Aguarde alguns minutos e tente novamente.",
+        )
+    _rate_buckets[key].append(now)
+
+
+def _valid_cpf(value: str) -> bool:
+    digits = "".join(char for char in value if char.isdigit())
+    if len(digits) != 11 or digits == digits[0] * 11:
+        return False
+    for check_index in (9, 10):
+        total = sum(int(digits[index]) * (check_index + 1 - index) for index in range(check_index))
+        expected = (total * 10) % 11
+        if expected == 10:
+            expected = 0
+        if int(digits[check_index]) != expected:
+            return False
+    return True
+
+
+def _validate_checkout_identity(body: "CreateChargeBody") -> None:
+    email = body.email.strip().lower()
+    phone = "".join(char for char in body.whatsapp if char.isdigit())
+    if not (3 <= len(body.name.strip()) <= 120):
+        raise HTTPException(400, "Informe seu nome completo.")
+    if len(email) > 254 or not _EMAIL_RE.fullmatch(email):
+        raise HTTPException(400, "Informe um e-mail válido.")
+    if phone.startswith("55"):
+        phone = phone[2:]
+    if len(phone) != 11 or phone[:2] in {"00", "01"} or phone[2] != "9":
+        raise HTTPException(400, "Informe um WhatsApp brasileiro válido.")
+    if not _valid_cpf(body.cpf):
+        raise HTTPException(400, "Informe um CPF válido.")
 
 
 # ---------------------------------------------------------------------------
@@ -273,7 +321,12 @@ async def create_checkout_charge(
     if not is_multi_tenant():
         raise HTTPException(404, "not found")
 
+    if (os.environ.get("CHECKOUT_ENABLED") or "true").strip().lower() not in {"1", "true", "yes"}:
+        raise HTTPException(503, "Checkout temporariamente indisponível.")
+
+    _validate_checkout_identity(body)
     _rate_limit("create-charge", _RATE_MAX_CHECKOUT, request)
+    _global_checkout_rate_limit()
 
     # --- Server-side price validation ---
     # Calculate expected total from the catalog; reject if client total differs.

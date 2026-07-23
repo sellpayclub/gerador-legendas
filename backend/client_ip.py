@@ -13,12 +13,26 @@ def get_client_ip(request: Request) -> str:
     except ValueError:
         trusted_proxy = False
     if trusted_proxy:
-        forwarded = (request.headers.get("x-forwarded-for") or "").split(",", 1)[0].strip()
-        real_ip = forwarded or (request.headers.get("x-real-ip") or "").strip()
+        # Proxies append the peer address to X-Forwarded-For. Do not trust the
+        # left-most value: a caller can send it themselves and bypass a
+        # per-IP limiter. Select the right-most public address instead.
+        forwarded = (request.headers.get("x-forwarded-for") or "").split(",")
+        for value in reversed(forwarded):
+            real_ip = value.strip()
+            if not real_ip:
+                continue
+            try:
+                parsed = ipaddress.ip_address(real_ip)
+                if not (parsed.is_private or parsed.is_loopback or parsed.is_link_local):
+                    return real_ip
+            except ValueError:
+                continue
+        real_ip = (request.headers.get("x-real-ip") or "").strip()
         if real_ip:
             try:
-                ipaddress.ip_address(real_ip)
-                return real_ip
+                parsed = ipaddress.ip_address(real_ip)
+                if not (parsed.is_private or parsed.is_loopback or parsed.is_link_local):
+                    return real_ip
             except ValueError:
                 pass
     return peer
