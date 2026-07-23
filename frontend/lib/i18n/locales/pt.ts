@@ -84,7 +84,7 @@ const pt = {
     signupTitle: "Criar conta",
     signupSubtitle: "Cadastro gratuito. O upload é liberado após a compra.",
     signupHint:
-      "Após comprar na Cakto, você receberá um e-mail para acessar. Contas novas ficam inativas até a confirmação do pagamento.",
+      "Após pagar via Pix, você receberá um e-mail para acessar. Contas novas ficam inativas até a confirmação do pagamento.",
     signupPasswordLabel: "Senha (mín. 6 caracteres)",
     signupSubmit: "Criar conta",
     hasAccount: "Já tem conta?",
@@ -99,7 +99,7 @@ const pt = {
   planInactive: {
     title: "Plano inativo",
     body: "Sua conta ainda não tem acesso ao upload e processamento de vídeos.",
-    hint: "Conclua a compra na Cakto com o mesmo e-mail do cadastro. Você receberá um link de acesso por e-mail assim que o pagamento for confirmado.",
+    hint: "Conclua a compra via Pix com o mesmo e-mail do cadastro. Você receberá um link de acesso assim que o pagamento for confirmado.",
     configureOpenAi: "Configurar chave OpenAI",
     backToLogin: "Voltar ao login",
   },

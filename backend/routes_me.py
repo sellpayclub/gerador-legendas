@@ -2,9 +2,12 @@
 from __future__ import annotations
 
 import asyncio
+import hmac
 import logging
+import os
 import time
 from collections import defaultdict
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import requests
@@ -13,7 +16,8 @@ from pydantic import BaseModel
 
 import app_settings
 from auth import UserContext, get_current_user, require_user
-from checkout import create_pix_charge, generate_correlation_id, resolve_charge_status
+from checkout import generate_correlation_id
+from asaas import create_pix_charge, resolve_charge_status
 from openpix_fulfillment import fulfill_openpix_order
 from openai_chat import build_chat_payload
 from supabase_client import rest_get, rest_upsert
@@ -27,9 +31,9 @@ log = logging.getLogger("legendas.routes_me")
 #  Simple in-memory rate limiter for checkout endpoints
 # ---------------------------------------------------------------------------
 _rate_buckets: dict[str, list[float]] = defaultdict(list)
-_RATE_WINDOW_S = 60  # 1 minute window
-_RATE_MAX_CHECKOUT = 5  # max 5 create-charge per IP per minute
-_RATE_MAX_STATUS = 30  # max 30 status checks per IP per minute
+_RATE_WINDOW_S = 600  # ten-minute anti-abuse window
+_RATE_MAX_CHECKOUT = 3  # max three billable charge attempts per IP / 10 min
+_RATE_MAX_STATUS = 220  # checkout polls every three seconds for five minutes
 
 
 def _rate_limit(key: str, max_requests: int, request: Request) -> None:
@@ -51,8 +55,8 @@ def _rate_limit(key: str, max_requests: int, request: Request) -> None:
 #  Server-side price catalog — NEVER trust the frontend price
 # ---------------------------------------------------------------------------
 _PRICE_CATALOG: dict[str, int] = {
-    "clipsaas-main": 9700,    # R$ 97,00 (ClipSaaS — Gerador de Legendas)
-    "bump-whatsapp": 990,     # R$ 9,90 (Suporte WhatsApp)
+    "clipsaas-main": 3700,    # R$ 37,00 (ClipSaaS — Gerador de Legendas)
+    "bump-whatsapp": 1990,    # R$ 19,90 (Suporte WhatsApp)
     "bump-updates": 1990,     # R$ 19,90 (Atualizações Futuras)
 }
 
@@ -175,7 +179,7 @@ async def test_me_settings(
         return {"ok": False, "message": "Erro ao testar conexão com OpenAI."}
 
 
-# ── Checkout PIX (OpenPix) ────────────────────────────────────────
+# ── Checkout PIX (Asaas) ─────────────────────────────────────────
 
 
 def _get_checkout_order(correlation_id: str) -> dict | None:
@@ -209,11 +213,31 @@ def _ensure_checkout_storage_available() -> None:
         ) from exc
 
 
+def _ensure_no_recent_checkout(email: str) -> None:
+    """Prevent repeated provider charges for the same buyer in a short window."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
+    rows = rest_get(
+        "orders",
+        params={
+            "customer_email": f"eq.{email.strip().lower()}",
+            "status": "eq.pending",
+            "created_at": f"gte.{cutoff}",
+            "select": "correlation_id",
+            "limit": "1",
+        },
+    )
+    if rows:
+        raise HTTPException(
+            429,
+            "Já existe um PIX recente para este e-mail. Use o código gerado ou aguarde alguns minutos.",
+        )
+
+
 def _fulfill_if_paid(correlation_id: str, *, source: str) -> dict | None:
     try:
         return fulfill_openpix_order(correlation_id, source=source)
     except Exception as exc:
-        log.exception("OpenPix fulfillment failed for %s", correlation_id)
+        log.exception("PIX fulfillment failed for %s", correlation_id)
         return {"ok": False, "error": str(exc)}
 
 
@@ -225,7 +249,7 @@ async def create_checkout_charge(
     background_tasks: BackgroundTasks,
     request: Request,
 ) -> dict:
-    """Create a PIX charge via OpenPix and save the order."""
+    """Create a PIX charge via Asaas and save the order."""
     if not is_multi_tenant():
         raise HTTPException(404, "not found")
 
@@ -275,10 +299,11 @@ async def create_checkout_charge(
             "Total inválido. Recarregue a página e tente novamente.",
         )
 
-    # Verify that an order can be persisted before asking OpenPix to create a
+    # Verify that an order can be persisted before asking Asaas to create a
     # payable charge. This prevents orphan PIX charges during database outages
     # or account quota restrictions.
     await asyncio.to_thread(_ensure_checkout_storage_available)
+    await asyncio.to_thread(_ensure_no_recent_checkout, body.email)
 
     correlation_id = generate_correlation_id()
 
@@ -290,7 +315,7 @@ async def create_checkout_charge(
     if not phone_clean.startswith("55"):
         phone_clean = f"55{phone_clean}"
 
-    # Create charge on OpenPix
+    # Create charge on Asaas
     charge_result = await asyncio.to_thread(
         create_pix_charge,
         value_cents=body.total_cents,
@@ -325,7 +350,8 @@ async def create_checkout_charge(
         "items": json.dumps([item.dict() for item in body.items]),
         "total_cents": body.total_cents,
         "status": "pending",
-        "openpix_charge_id": charge_result.get("charge_id", ""),
+        "asaas_payment_id": charge_result.get("charge_id", ""),
+        "asaas_customer_id": charge_result.get("customer_id", ""),
         "utm_source": (body.utm_source or "").strip() or None,
         "utm_medium": (body.utm_medium or "").strip() or None,
         "utm_campaign": (body.utm_campaign or "").strip() or None,
@@ -390,7 +416,7 @@ async def checkout_charge_status(correlation_id: str, request: Request) -> dict:
     _rate_limit("checkout-status", _RATE_MAX_STATUS, request)
 
     order = _get_checkout_order(correlation_id)
-    fallback_charge_id = str(order.get("openpix_charge_id") or "") if order else ""
+    fallback_charge_id = str(order.get("asaas_payment_id") or "") if order else ""
     order_paid = bool(order and order.get("status") == "paid")
     result = resolve_charge_status(
         correlation_id,
@@ -422,7 +448,7 @@ async def checkout_fulfill(correlation_id: str, request: Request) -> dict:
     if not order:
         raise HTTPException(404, "Pedido não encontrado")
 
-    fallback_charge_id = str(order.get("openpix_charge_id") or "")
+    fallback_charge_id = str(order.get("asaas_payment_id") or "")
     result = resolve_charge_status(
         correlation_id,
         fallback_charge_id=fallback_charge_id or None,
@@ -461,3 +487,59 @@ async def cakto_webhook(_body: CaktoWebhookBody) -> dict:
             "message": "Webhook Cakto migrado para Supabase Edge Function.",
         },
     )
+
+
+@router.post("/webhooks/asaas")
+async def asaas_webhook(
+    request: Request,
+) -> dict:
+    """Authenticate Asaas notifications and fulfill received PIX payments."""
+    if not is_multi_tenant():
+        raise HTTPException(404, "not found")
+
+    expected_token = (os.environ.get("ASAAS_WEBHOOK_TOKEN") or "").strip()
+    received_token = (request.headers.get("asaas-access-token") or "").strip()
+    if not expected_token or not hmac.compare_digest(received_token, expected_token):
+        raise HTTPException(401, "webhook não autorizado")
+
+    try:
+        payload = await request.json()
+    except Exception as exc:
+        raise HTTPException(400, "payload inválido") from exc
+
+    event = str(payload.get("event") or "")
+    payment = payload.get("payment") or {}
+    if event != "PAYMENT_RECEIVED":
+        return {"ok": True, "ignored": True, "event": event}
+
+    correlation_id = str(payment.get("externalReference") or "").strip()
+    payment_id = str(payment.get("id") or "").strip()
+    if not correlation_id or not payment_id:
+        raise HTTPException(400, "pagamento sem identificadores")
+
+    order = _get_checkout_order(correlation_id)
+    if not order:
+        # A retry is desirable if the provider event races order persistence.
+        raise HTTPException(503, "pedido ainda não localizado")
+    if not hmac.compare_digest(str(order.get("asaas_payment_id") or ""), payment_id):
+        log.warning(
+            "Asaas webhook payment mismatch: order=%s received=%s",
+            correlation_id,
+            payment_id,
+        )
+        raise HTTPException(409, "pagamento não corresponde ao pedido")
+    if int(order.get("total_cents") or 0) != round(float(payment.get("value") or 0) * 100):
+        log.warning("Asaas webhook value mismatch for order %s", correlation_id)
+        raise HTTPException(409, "valor não corresponde ao pedido")
+
+    fulfillment = await asyncio.to_thread(
+        _fulfill_if_paid,
+        correlation_id,
+        source="asaas-webhook",
+    )
+    if not fulfillment or not fulfillment.get("ok"):
+        raise HTTPException(
+            503,
+            fulfillment.get("error") if fulfillment else "falha ao liberar acesso",
+        )
+    return {"ok": True, "fulfilled": True}

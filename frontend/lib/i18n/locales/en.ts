@@ -86,7 +86,7 @@ const en: Messages = {
     signupTitle: "Create account",
     signupSubtitle: "Free registration. Upload is enabled after purchase.",
     signupHint:
-      "After buying on Cakto, you'll receive an email to access. New accounts stay inactive until payment is confirmed.",
+      "After paying via Pix, you'll receive an access email. New accounts stay inactive until payment is confirmed.",
     signupPasswordLabel: "Password (min. 6 characters)",
     signupSubmit: "Create account",
     hasAccount: "Already have an account?",
@@ -101,7 +101,7 @@ const en: Messages = {
   planInactive: {
     title: "Inactive plan",
     body: "Your account does not have access to upload and process videos yet.",
-    hint: "Complete purchase on Cakto with the same email used to sign up. You'll receive an access link by email once payment is confirmed.",
+    hint: "Complete the Pix purchase with the same email used to sign up. You'll receive an access link once payment is confirmed.",
     configureOpenAi: "Configure OpenAI key",
     backToLogin: "Back to sign in",
   },

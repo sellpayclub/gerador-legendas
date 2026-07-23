@@ -86,7 +86,7 @@ const es: Messages = {
     signupTitle: "Crear cuenta",
     signupSubtitle: "Registro gratuito. La subida se activa después de la compra.",
     signupHint:
-      "Después de comprar en Cakto, recibirás un correo para acceder. Las cuentas nuevas quedan inactivas hasta confirmar el pago.",
+      "Después de pagar por Pix, recibirás un correo para acceder. Las cuentas nuevas quedan inactivas hasta confirmar el pago.",
     signupPasswordLabel: "Contraseña (mín. 6 caracteres)",
     signupSubmit: "Crear cuenta",
     hasAccount: "¿Ya tienes cuenta?",
@@ -101,7 +101,7 @@ const es: Messages = {
   planInactive: {
     title: "Plan inactivo",
     body: "Tu cuenta aún no tiene acceso a subir y procesar vídeos.",
-    hint: "Completa la compra en Cakto con el mismo correo del registro. Recibirás un enlace de acceso por correo cuando se confirme el pago.",
+    hint: "Completa la compra por Pix con el mismo correo del registro. Recibirás un enlace de acceso cuando se confirme el pago.",
     configureOpenAi: "Configurar clave OpenAI",
     backToLogin: "Volver al inicio de sesión",
   },

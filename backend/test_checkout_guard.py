@@ -24,6 +24,12 @@ class CheckoutStorageGuardTests(unittest.TestCase):
         self.assertEqual(caught.exception.status_code, 503)
         self.assertIn("Nenhuma cobrança foi criada", caught.exception.detail)
 
+    def test_recent_pending_order_blocks_duplicate_charge(self) -> None:
+        with patch.object(routes_me, "rest_get", return_value=[{"correlation_id": "existing"}]):
+            with self.assertRaises(HTTPException) as caught:
+                routes_me._ensure_no_recent_checkout("buyer@example.com")
+        self.assertEqual(caught.exception.status_code, 429)
+
 
 if __name__ == "__main__":
     unittest.main()

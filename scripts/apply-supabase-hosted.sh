@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Apply ClipSaaS hosted migrations (002 + 003 + 004) to a remote Supabase Postgres database.
+# Apply ClipSaaS hosted migrations to a remote Supabase Postgres database.
 #
 # Usage:
 #   export SUPABASE_DB_URL='postgresql://postgres.[ref]:[PASSWORD]@aws-0-[region].pooler.supabase.com:6543/postgres'
@@ -14,6 +14,7 @@ MIGRATIONS=(
   "$ROOT/supabase/migrations/002_clipsaas_hosted.sql"
   "$ROOT/supabase/migrations/003_profiles_rls_lockdown.sql"
   "$ROOT/supabase/migrations/004_webhook_events.sql"
+  "$ROOT/supabase/migrations/010_asaas_checkout.sql"
 )
 
 verify_rest() {

@@ -1,4 +1,4 @@
-"""E-mail transacional com PIX pendente (checkout OpenPix)."""
+"""E-mail transacional com PIX pendente do checkout."""
 from __future__ import annotations
 
 import html

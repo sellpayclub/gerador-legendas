@@ -24,4 +24,4 @@ dependencies = [
 dev = ["ruff>=0.4"]
 
 [tool.setuptools]
-py-modules = ["main", "transcribe", "ass_gen", "render", "jobs", "presets", "media", "fonts_util", "timing", "effects", "keywords", "compose", "templates", "overlays", "enrich", "clips", "clip_render", "auth", "tenant", "deps", "routes_me", "user_secrets", "supabase_client", "crypto_util", "db_jobs", "cakto_webhook", "purchase_email", "request_context", "client_ip"]
+py-modules = ["main", "transcribe", "ass_gen", "render", "jobs", "presets", "media", "fonts_util", "timing", "effects", "keywords", "compose", "templates", "overlays", "enrich", "clips", "clip_render", "auth", "tenant", "deps", "routes_me", "user_secrets", "supabase_client", "crypto_util", "db_jobs", "cakto_webhook", "purchase_email", "request_context", "client_ip", "asaas"]

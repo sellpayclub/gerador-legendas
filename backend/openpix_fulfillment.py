@@ -1,4 +1,4 @@
-"""Fulfill OpenPix PIX orders — activate access and send purchase email."""
+"""Fulfill checkout PIX orders — activate access and send purchase email."""
 from __future__ import annotations
 
 import logging
@@ -9,7 +9,7 @@ from cakto_webhook import _activate_purchase, _find_user_id_by_email
 from meta_capi import send_purchase_from_order
 from supabase_client import rest_get, rest_patch, rest_upsert
 
-log = logging.getLogger("legendas.openpix_fulfillment")
+log = logging.getLogger("legendas.pix_fulfillment")
 
 PRODUCT_NAME = "ClipSaaS — Gerador de Legendas"
 
@@ -46,8 +46,8 @@ def _log_webhook_event(
         rest_upsert(
             "webhook_events",
             {
-                "order_id": f"openpix-{correlation_id}",
-                "event": "OPENPIX:CHARGE_COMPLETED",
+                "order_id": f"pix-{correlation_id}",
+                "event": "PIX:PAYMENT_RECEIVED",
                 "email": email,
                 "status": status,
                 "email_id": email_id,
@@ -66,7 +66,7 @@ def fulfill_openpix_order(
     source: str = "poll",
     force_resend: bool = False,
 ) -> dict[str, Any]:
-    """Activate access for a paid OpenPix order. Idempotent when already fulfilled."""
+    """Activate access for a paid PIX order. Idempotent when already fulfilled."""
     order = _get_order(correlation_id)
     if not order:
         return {"ok": False, "error": "order not found", "correlation_id": correlation_id}

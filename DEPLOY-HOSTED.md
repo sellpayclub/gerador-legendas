@@ -62,6 +62,9 @@ SUPABASE_SERVICE_ROLE_KEY=eyJ...
 SUPABASE_ANON_KEY=eyJ...   # fallback auth API
 # SUPABASE_JWT_SECRET=    # opcional; omita para validar via /auth/v1/user
 ENCRYPTION_KEY=          # openssl rand -base64 32
+ASAAS_ENVIRONMENT=production
+ASAAS_API_KEY=           # chave de produção; nunca commitar
+ASAAS_WEBHOOK_TOKEN=     # token aleatório de 32–255 caracteres
 CAKTO_WEBHOOK_SECRET=seu-secret-cakto
 RESEND_API_KEY=re_...
 RESEND_FROM_EMAIL=ClipSaaS <acesso@email.clonefyia.com>
@@ -81,7 +84,24 @@ NEXT_PUBLIC_API_URL=http://127.0.0.1:8000
 BACKEND_URL=http://127.0.0.1:8000
 ```
 
-## 3. Cakto + Resend (Supabase Edge Function)
+## 3. Asaas PIX + Resend
+
+O checkout cria a cobrança diretamente no backend da VPS e recebe a confirmação em:
+
+`https://app.clipsaas.site/webhooks/asaas`
+
+Configuração do webhook Asaas:
+
+- token de autenticação igual a `ASAAS_WEBHOOK_TOKEN`;
+- evento `PAYMENT_RECEIVED`;
+- URL pública acima;
+- processamento idempotente: o pedido, o valor e o ID Asaas são conferidos antes da liberação.
+
+Antes de reiniciar a VPS, aplique `supabase/migrations/010_asaas_checkout.sql`.
+Teste primeiro com `ASAAS_ENVIRONMENT=sandbox`; somente depois troque para `production`
+e instale uma chave de produção.
+
+## 4. Cakto legado + Resend (Supabase Edge Function)
 
 O webhook Cakto **não** passa mais pela VPS. Use a Edge Function no Supabase:
 
@@ -105,7 +125,7 @@ O webhook Cakto **não** passa mais pela VPS. Use a Edge Function no Supabase:
 7. Auditoria: tabela `webhook_events` no Supabase (status, email_id, erros).
 8. Endpoint antigo na VPS (`/webhooks/cakto`) retorna **410 Gone** — não use.
 
-## 4. VPS (161.97.79.7)
+## 5. VPS (161.97.79.7)
 
 DNS: `app.clipsaas.site` → A → `161.97.79.7`
 
@@ -132,7 +152,7 @@ Verificar:
 curl -s https://app.clipsaas.site/api/health
 ```
 
-## 5. Checklist pós-deploy
+## 6. Checklist pós-deploy
 
 - [ ] `https://app.clipsaas.site` abre login
 - [ ] Supabase redirect funciona (`/auth/callback`)

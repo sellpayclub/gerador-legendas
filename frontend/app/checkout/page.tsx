@@ -11,8 +11,8 @@ const LOGO_URL = "/brand/logo-checkout.png";
 const MAIN_PRODUCT = {
   id: "clipsaas-main",
   name: "ClipSaaS — Gerador de Legendas",
-  price_cents: 9700,
-  regular_price_cents: 14700,
+  price_cents: 3700,
+  regular_price_cents: 9700,
   description: "Acesso vitalício à plataforma e uso ilimitado",
 };
 
@@ -23,7 +23,7 @@ const ORDER_BUMPS = [
     name: "Suporte WhatsApp",
     description:
       "Suporte exclusivo via WhatsApp para tirar dúvidas e receber ajuda personalizada",
-    price_cents: 990,
+    price_cents: 1990,
   },
   {
     id: "bump-updates",
@@ -1101,7 +1101,7 @@ export default function CheckoutPage() {
 
             <div style={S.securityBadge}>
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
-              Pagamento processado pela OpenPix • 100% seguro
+              Pagamento processado pela Asaas • 100% seguro
             </div>
           </div>
         )}
