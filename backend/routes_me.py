@@ -16,7 +16,7 @@ from pydantic import BaseModel
 
 import app_settings
 from auth import UserContext, get_current_user, require_user
-from checkout import generate_correlation_id
+from checkout import generate_correlation_id, resolve_charge_status as resolve_openpix_status
 from asaas import create_pix_charge, resolve_charge_status
 from openpix_fulfillment import fulfill_openpix_order
 from openai_chat import build_chat_payload
@@ -241,6 +241,26 @@ def _fulfill_if_paid(correlation_id: str, *, source: str) -> dict | None:
         return {"ok": False, "error": str(exc)}
 
 
+def _resolve_order_charge_status(
+    correlation_id: str,
+    *,
+    charge_id: str,
+    order_paid: bool = False,
+) -> dict:
+    """Keep legacy OpenPix orders payable while new orders use Asaas."""
+    if charge_id.startswith("pay_"):
+        return resolve_charge_status(
+            correlation_id,
+            fallback_charge_id=charge_id,
+            order_paid=order_paid,
+        )
+    return resolve_openpix_status(
+        correlation_id,
+        fallback_charge_id=charge_id or None,
+        order_paid=order_paid,
+    )
+
+
 from fastapi import BackgroundTasks
 
 @router.post("/api/checkout/create-charge")
@@ -350,8 +370,9 @@ async def create_checkout_charge(
         "items": json.dumps([item.dict() for item in body.items]),
         "total_cents": body.total_cents,
         "status": "pending",
-        "asaas_payment_id": charge_result.get("charge_id", ""),
-        "asaas_customer_id": charge_result.get("customer_id", ""),
+        # Asaas IDs start with "pay_"; reuse the existing provider ID column
+        # so the production cutover does not depend on a schema migration.
+        "openpix_charge_id": charge_result.get("charge_id", ""),
         "utm_source": (body.utm_source or "").strip() or None,
         "utm_medium": (body.utm_medium or "").strip() or None,
         "utm_campaign": (body.utm_campaign or "").strip() or None,
@@ -416,11 +437,11 @@ async def checkout_charge_status(correlation_id: str, request: Request) -> dict:
     _rate_limit("checkout-status", _RATE_MAX_STATUS, request)
 
     order = _get_checkout_order(correlation_id)
-    fallback_charge_id = str(order.get("asaas_payment_id") or "") if order else ""
+    fallback_charge_id = str(order.get("openpix_charge_id") or "") if order else ""
     order_paid = bool(order and order.get("status") == "paid")
-    result = resolve_charge_status(
+    result = _resolve_order_charge_status(
         correlation_id,
-        fallback_charge_id=fallback_charge_id or None,
+        charge_id=fallback_charge_id,
         order_paid=order_paid,
     )
     status = result.get("status", "UNKNOWN")
@@ -448,10 +469,10 @@ async def checkout_fulfill(correlation_id: str, request: Request) -> dict:
     if not order:
         raise HTTPException(404, "Pedido não encontrado")
 
-    fallback_charge_id = str(order.get("asaas_payment_id") or "")
-    result = resolve_charge_status(
+    fallback_charge_id = str(order.get("openpix_charge_id") or "")
+    result = _resolve_order_charge_status(
         correlation_id,
-        fallback_charge_id=fallback_charge_id or None,
+        charge_id=fallback_charge_id,
     )
     status = result.get("status", "UNKNOWN")
     if status != "COMPLETED":
@@ -521,7 +542,7 @@ async def asaas_webhook(
     if not order:
         # A retry is desirable if the provider event races order persistence.
         raise HTTPException(503, "pedido ainda não localizado")
-    if not hmac.compare_digest(str(order.get("asaas_payment_id") or ""), payment_id):
+    if not hmac.compare_digest(str(order.get("openpix_charge_id") or ""), payment_id):
         log.warning(
             "Asaas webhook payment mismatch: order=%s received=%s",
             correlation_id,

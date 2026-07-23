@@ -97,7 +97,9 @@ Configuração do webhook Asaas:
 - URL pública acima;
 - processamento idempotente: o pedido, o valor e o ID Asaas são conferidos antes da liberação.
 
-Antes de reiniciar a VPS, aplique `supabase/migrations/010_asaas_checkout.sql`.
+O corte de produção reutiliza a coluna existente de ID da cobrança, permitindo
+rollback sem migration obrigatória. `supabase/migrations/010_asaas_checkout.sql`
+é opcional para uma futura separação nominal dos identificadores.
 Teste primeiro com `ASAAS_ENVIRONMENT=sandbox`; somente depois troque para `production`
 e instale uma chave de produção.
 

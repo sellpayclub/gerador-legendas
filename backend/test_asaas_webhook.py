@@ -48,7 +48,7 @@ class AsaasWebhookTests(unittest.IsolatedAsyncioTestCase):
             "event": "PAYMENT_RECEIVED",
             "payment": {"id": "pay_1", "externalReference": "order-1", "value": 37},
         }
-        order = {"asaas_payment_id": "pay_1", "total_cents": 3700}
+        order = {"openpix_charge_id": "pay_1", "total_cents": 3700}
         with (
             patch.dict(os.environ, {"ASAAS_WEBHOOK_TOKEN": "secure-token"}),
             patch.object(routes_me, "is_multi_tenant", return_value=True),
@@ -63,7 +63,7 @@ class AsaasWebhookTests(unittest.IsolatedAsyncioTestCase):
             "event": "PAYMENT_RECEIVED",
             "payment": {"id": "pay_1", "externalReference": "order-1", "value": 1},
         }
-        order = {"asaas_payment_id": "pay_1", "total_cents": 3700}
+        order = {"openpix_charge_id": "pay_1", "total_cents": 3700}
         with (
             patch.dict(os.environ, {"ASAAS_WEBHOOK_TOKEN": "secure-token"}),
             patch.object(routes_me, "is_multi_tenant", return_value=True),
